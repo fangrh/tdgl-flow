@@ -1,3 +1,5 @@
+import asyncio
+import json
 import shutil
 from pathlib import Path
 from typing import Annotated
@@ -7,10 +9,12 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi import Path as ApiPath
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.exc import IntegrityError
 
 from tdgl_data.config import Settings
 from tdgl_data.db import create_engine_from_url, create_session_factory
+from tdgl_data.events import FrameAvailableEvent, RunCompletedEvent, bus
 from tdgl_data.models import Base, Frame, Run
 from tdgl_data.repository import (
     append_frame_record,
@@ -145,6 +149,7 @@ def create_app(
     app = FastAPI(title=settings.app_name)
     app.state.session_factory = session_factory
     app.state.zarr_store = zarr_store
+    app.state.event_bus = bus
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
@@ -163,6 +168,41 @@ def create_app(
         if not viewer_path.exists():
             raise HTTPException(status_code=500, detail="Viewer asset not found")
         return HTMLResponse(viewer_path.read_text(encoding="utf-8"))
+
+    @app.get("/api/runs/{run_id}/events")
+    async def api_run_events(run_id: str) -> EventSourceResponse:
+        with session_factory() as session:
+            if get_run(session, run_id) is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+
+        async def event_generator():
+            queue = app.state.event_bus.subscribe(run_id)
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                        if isinstance(event, FrameAvailableEvent):
+                            data = json.dumps({
+                                "run_id": event.run_id,
+                                "frame_index": event.frame_index,
+                                "time_value": event.time_value,
+                                "je": event.je,
+                                "voltage": event.voltage,
+                                "frame_count": event.frame_count,
+                            })
+                            yield {"event": "frame_available", "data": data}
+                        elif isinstance(event, RunCompletedEvent):
+                            data = json.dumps({
+                                "run_id": event.run_id,
+                                "status": event.status,
+                            })
+                            yield {"event": "run_completed", "data": data}
+                    except asyncio.TimeoutError:
+                        yield {"comment": "keepalive"}
+            finally:
+                app.state.event_bus.unsubscribe(run_id, queue)
+
+        return EventSourceResponse(event_generator())
 
     @app.post("/api/runs", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
     def api_create_run(body: CreateRunRequest) -> RunResponse:
@@ -215,11 +255,12 @@ def create_app(
                     fields=("psi_real", "psi_imag", "mu"),
                 )
                 run.zarr_root = created_store_uri
-                for synthetic_frame in generate_synthetic_run(
+                synthetic_frames = list(generate_synthetic_run(
                     body.frame_count,
                     body.grid_shape,
                     seed=body.seed,
-                ):
+                ))
+                for synthetic_frame in synthetic_frames:
                     frame_arrays = synthetic_frame.arrays()
                     stats = _compute_frame_stats(frame_arrays)
                     frame = append_frame_record(
@@ -240,6 +281,15 @@ def create_app(
                     )
                     mark_frame_available(session, frame)
                 session.commit()
+                for i, sf in enumerate(synthetic_frames):
+                    app.state.event_bus.publish(run.run_id, FrameAvailableEvent(
+                        run_id=run.run_id,
+                        frame_index=sf.frame_index,
+                        time_value=sf.time_value,
+                        je=sf.je,
+                        voltage=sf.voltage,
+                        frame_count=i + 1,
+                    ))
             except Exception:
                 session.rollback()
                 if created_store_uri is not None:
@@ -318,6 +368,18 @@ def create_app(
                     delete_frame_record(cleanup_session, run_id, body.frame_index)
                     cleanup_session.commit()
                 raise
+            with session_factory() as count_session:
+                frame_count = len([
+                    f for f in get_timeline(count_session, run_id) if f.status == "available"
+                ])
+            app.state.event_bus.publish(run_id, FrameAvailableEvent(
+                run_id=run_id,
+                frame_index=body.frame_index,
+                time_value=body.time_value,
+                je=body.je,
+                voltage=body.voltage,
+                frame_count=frame_count,
+            ))
             return _frame_metadata(frame)
 
     @app.get("/api/runs/{run_id}/timeline", response_model=TimelineResponse)
