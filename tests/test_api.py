@@ -658,3 +658,13 @@ def test_sse_endpoint_exists_for_valid_run(client):
     # FastAPI may not support HEAD for all endpoints, so we accept either 405 or 200
     # The important thing is the endpoint exists (doesn't return 404)
     assert response.status_code != 404
+
+
+def test_viewer_supports_live_updates(client):
+    response = client.get("/viewer")
+    assert response.status_code == 200
+    assert "EventSource" in response.text
+    assert "frame_available" in response.text
+    assert "autoFollow" in response.text
+    assert "closeEventSource" in response.text
+    assert "openEventSource" in response.text

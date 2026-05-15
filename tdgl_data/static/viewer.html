@@ -90,6 +90,7 @@
         <option value="60">4x</option>
         <option value="30">8x</option>
       </select></label>
+      <label><input id="autoFollow" type="checkbox" checked> Auto-follow</label>
       <input id="frameSlider" type="range" min="0" max="0" value="0" disabled aria-label="Frame">
       <span id="framePositionValue">0 / 0</span>
     </section>
@@ -147,6 +148,7 @@
       playing: false,
       timer: null,
       frameBuffer: new Map(),
+      eventSource: null,
     };
     const els = {
       createDemo: document.getElementById("createDemo"),
@@ -159,6 +161,7 @@
       frameSlider: document.getElementById("frameSlider"),
       playbackStep: document.getElementById("playbackStep"),
       playbackSpeed: document.getElementById("playbackSpeed"),
+      autoFollow: document.getElementById("autoFollow"),
       framePositionValue: document.getElementById("framePositionValue"),
       prevFrame: document.getElementById("prevFrame"),
       playPause: document.getElementById("playPause"),
@@ -582,6 +585,39 @@
       }
     }
 
+    function closeEventSource() {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
+    }
+
+    function openEventSource(runId) {
+      closeEventSource();
+      state.eventSource = new EventSource(`/api/runs/${runId}/events`);
+      state.eventSource.addEventListener("frame_available", (event) => {
+        const data = JSON.parse(event.data);
+        const existing = state.frames.find(f => f.frame_index === data.frame_index);
+        if (existing) return;
+        state.frames.push({
+          frame_index: data.frame_index,
+          time_value: data.time_value,
+          je: data.je,
+          voltage: data.voltage,
+          status: "available",
+        });
+        els.frameSlider.max = String(state.frames.length - 1);
+        updateFramePositionLabel(state.frameIndex);
+        if (els.autoFollow.checked) {
+          loadFrame(state.frames.length - 1);
+        }
+        setStatus(`Frame ${data.frame_index} arrived (${data.frame_count} total).`);
+      });
+      state.eventSource.onerror = () => {
+        setStatus("Event stream disconnected. Reconnecting...", false);
+      };
+    }
+
     function setControlsEnabled(enabled) {
       els.frameSlider.disabled = !enabled;
       els.prevFrame.disabled = !enabled;
@@ -612,6 +648,7 @@
       if (state.runId) {
         await loadTimeline(state.runId);
       } else {
+        closeEventSource();
         state.frames = [];
         state.psiBounds = null;
         setControlsEnabled(false);
@@ -633,7 +670,9 @@
       state.iv = await requestJson(`/api/runs/${runId}/iv`);
       state.frames = state.timeline.frames;
       state.frameBuffer.clear();
+      closeEventSource();
       if (!state.frames.length) {
+        closeEventSource();
         setControlsEnabled(false);
         clearCanvas(els.psiCanvas);
         clearCanvas(els.muCanvas);
@@ -657,6 +696,7 @@
         drawColorbar(els.muColorbar, state.timeline.stats.mu, "mu");
       }
       setControlsEnabled(true);
+      openEventSource(runId);
       await loadFrame(0);
     }
 
@@ -790,6 +830,8 @@
         startPlayback();
       }
     });
+
+    window.addEventListener("beforeunload", closeEventSource);
 
     setControlsEnabled(false);
     loadRuns().catch((error) => setStatus(error.message, true));
