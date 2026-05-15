@@ -70,6 +70,9 @@ class Frame(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
     zarr_group: Mapped[str] = mapped_column(Text, nullable=False)
     checksum: Mapped[str | None] = mapped_column(String(128))
+    frame_stats: Mapped[dict | None] = mapped_column(
+        MutableDict.as_mutable(json_type), default=None, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
