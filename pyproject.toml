@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.111",
   "httpx>=0.27",
   "numpy>=1.26",
+  "psycopg[binary]>=3.2",
   "pydantic>=2.7",
   "pydantic-settings>=2.2",
   "sqlalchemy>=2.0",
@@ -26,12 +27,12 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.5",
 ]
-postgres = [
-  "psycopg[binary]>=3.2",
-]
 
 [tool.setuptools.packages.find]
 include = ["tdgl_data*"]
+
+[tool.setuptools.package-data]
+tdgl_data = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
