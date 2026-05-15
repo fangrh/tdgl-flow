@@ -3,12 +3,30 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+import numpy as np
+from sqlalchemy.exc import IntegrityError
 
 from tdgl_data.config import Settings
 from tdgl_data.db import create_engine_from_url, create_session_factory
-from tdgl_data.models import Base, Run
-from tdgl_data.repository import create_run, get_run, list_runs
-from tdgl_data.schemas import CreateRunRequest, RunResponse
+from tdgl_data.models import Base, Frame, Run
+from tdgl_data.repository import (
+    append_frame_record,
+    create_run,
+    get_frame,
+    get_iv_points,
+    get_run,
+    get_timeline,
+    list_runs,
+)
+from tdgl_data.schemas import (
+    CreateRunRequest,
+    FrameAppendRequest,
+    FrameMetadataResponse,
+    FrameResponse,
+    IVPointResponse,
+    RunResponse,
+    TimelineResponse,
+)
 from tdgl_data.zarr_store import FilesystemZarrStore
 
 
@@ -39,6 +57,38 @@ def _run_response(run: Run) -> RunResponse:
         timing_params=run.timing_params,
         metadata=run.metadata_,
     )
+
+
+def _frame_metadata(frame: Frame) -> FrameMetadataResponse:
+    return FrameMetadataResponse(
+        frame_index=frame.frame_index,
+        time_value=frame.time_value,
+        je=frame.je,
+        voltage=frame.voltage,
+        status=frame.status,
+    )
+
+
+def _stats_value(value: np.floating | float) -> float:
+    return round(float(value), 7)
+
+
+def _frame_arrays(body: FrameAppendRequest) -> dict[str, np.ndarray]:
+    return {
+        "psi_real": np.asarray(body.psi_real, dtype="float32"),
+        "psi_imag": np.asarray(body.psi_imag, dtype="float32"),
+        "mu": np.asarray(body.mu, dtype="float32"),
+    }
+
+
+def _update_stats(
+    stats: dict[str, dict[str, float]],
+    arrays: dict[str, np.ndarray],
+) -> None:
+    for name, values in arrays.items():
+        entry = stats.setdefault(name, {"min": float("inf"), "max": float("-inf")})
+        entry["min"] = min(entry["min"], _stats_value(np.min(values)))
+        entry["max"] = max(entry["max"], _stats_value(np.max(values)))
 
 
 def create_app(
@@ -113,5 +163,93 @@ def create_app(
             if run is None:
                 raise HTTPException(status_code=404, detail="Run not found")
             return _run_response(run)
+
+    @app.post(
+        "/api/runs/{run_id}/frames",
+        response_model=FrameMetadataResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def api_append_frame(run_id: str, body: FrameAppendRequest) -> FrameMetadataResponse:
+        arrays = _frame_arrays(body)
+        with session_factory() as session:
+            run = get_run(session, run_id)
+            if run is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+            if get_frame(session, run_id, body.frame_index) is not None:
+                raise HTTPException(status_code=409, detail="Frame already exists")
+
+            zarr_store.append_frame(run_id, body.frame_index, arrays)
+            try:
+                frame = append_frame_record(
+                    session,
+                    run_id=run_id,
+                    frame_index=body.frame_index,
+                    time_value=body.time_value,
+                    je=body.je,
+                    voltage=body.voltage,
+                    zarr_group=run.zarr_root,
+                )
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                raise HTTPException(status_code=409, detail="Frame already exists") from None
+            return _frame_metadata(frame)
+
+    @app.get("/api/runs/{run_id}/timeline", response_model=TimelineResponse)
+    def api_timeline(run_id: str) -> TimelineResponse:
+        with session_factory() as session:
+            if get_run(session, run_id) is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+            frames = get_timeline(session, run_id)
+
+        stats: dict[str, dict[str, float]] = {}
+        for frame in frames:
+            arrays = zarr_store.read_frame(
+                run_id,
+                frame.frame_index,
+                fields=("psi_real", "psi_imag", "mu"),
+            )
+            _update_stats(stats, arrays)
+
+        return TimelineResponse(
+            run_id=run_id,
+            frames=[_frame_metadata(frame) for frame in frames],
+            stats=stats,
+        )
+
+    @app.get("/api/runs/{run_id}/iv", response_model=list[IVPointResponse])
+    def api_iv(run_id: str) -> list[IVPointResponse]:
+        with session_factory() as session:
+            if get_run(session, run_id) is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+            return [
+                IVPointResponse(
+                    frame_index=point.frame_index,
+                    time_value=point.time_value,
+                    je=point.je,
+                    voltage=point.voltage,
+                )
+                for point in get_iv_points(session, run_id)
+            ]
+
+    @app.get("/api/runs/{run_id}/frames/{frame_index}", response_model=FrameResponse)
+    def api_get_frame(run_id: str, frame_index: int) -> FrameResponse:
+        with session_factory() as session:
+            frame = get_frame(session, run_id, frame_index)
+            if frame is None:
+                raise HTTPException(status_code=404, detail="Frame not found")
+            arrays = zarr_store.read_frame(
+                run_id,
+                frame_index,
+                fields=("psi_real", "psi_imag", "mu"),
+            )
+            return FrameResponse(
+                run_id=run_id,
+                frame_index=frame_index,
+                time_value=frame.time_value,
+                je=frame.je,
+                voltage=frame.voltage,
+                arrays={name: values.tolist() for name, values in arrays.items()},
+            )
 
     return app

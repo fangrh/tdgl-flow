@@ -3,6 +3,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
+StrictNonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 
 
 class CreateRunRequest(BaseModel):
@@ -27,7 +28,7 @@ class RunResponse(BaseModel):
 
 
 class FrameAppendRequest(BaseModel):
-    frame_index: int
+    frame_index: StrictNonNegativeInt
     time_value: float
     je: float
     voltage: float

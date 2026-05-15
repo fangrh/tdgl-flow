@@ -143,3 +143,52 @@ def test_create_run_cleans_up_zarr_store_when_commit_fails(tmp_path):
 
     assert response.status_code == 500
     assert not list(zarr_root.glob("runs/*/frames.zarr"))
+
+
+def test_append_frame_and_read_timeline_iv_and_frame(client):
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    run_id = created.json()["run_id"]
+
+    frame_body = {
+        "frame_index": 0,
+        "time_value": 0.1,
+        "je": 1.2,
+        "voltage": 0.024,
+        "psi_real": [[1.0, 0.5], [0.25, 0.0]],
+        "psi_imag": [[0.0, 0.5], [0.75, 1.0]],
+        "mu": [[-0.1, 0.0], [0.1, 0.2]],
+    }
+    appended = client.post(f"/api/runs/{run_id}/frames", json=frame_body)
+    assert appended.status_code == 201
+
+    timeline = client.get(f"/api/runs/{run_id}/timeline")
+    assert timeline.status_code == 200
+    assert timeline.json()["frames"][0]["frame_index"] == 0
+    assert timeline.json()["stats"]["mu"]["max"] == 0.2
+
+    iv = client.get(f"/api/runs/{run_id}/iv")
+    assert iv.status_code == 200
+    assert iv.json()[0]["je"] == 1.2
+
+    frame = client.get(f"/api/runs/{run_id}/frames/0")
+    assert frame.status_code == 200
+    assert frame.json()["arrays"]["psi_real"][0][0] == 1.0
+
+
+def test_append_duplicate_frame_returns_409(client):
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [1, 1]})
+    run_id = created.json()["run_id"]
+    body = {
+        "frame_index": 0,
+        "time_value": 0.0,
+        "je": 0.0,
+        "voltage": 0.0,
+        "psi_real": [[0.0]],
+        "psi_imag": [[0.0]],
+        "mu": [[0.0]],
+    }
+
+    assert client.post(f"/api/runs/{run_id}/frames", json=body).status_code == 201
+    duplicate = client.post(f"/api/runs/{run_id}/frames", json=body)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "Frame already exists"
