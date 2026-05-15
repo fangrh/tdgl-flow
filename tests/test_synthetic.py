@@ -43,13 +43,16 @@ def test_generated_current_and_voltage_are_nondecreasing():
     assert np.all(np.diff(voltage_values) >= 0.0)
 
 
-@pytest.mark.parametrize("frame_count", [0, -1, 1.5])
+@pytest.mark.parametrize("frame_count", [0, -1, 1.5, True])
 def test_generate_synthetic_run_rejects_invalid_frame_count(frame_count):
     with pytest.raises(ValueError, match="frame_count must be a positive integer"):
         list(generate_synthetic_run(frame_count=frame_count, grid_shape=(6, 5), seed=123))
 
 
-@pytest.mark.parametrize("grid_shape", [(0, 5), (5, 0), (5,), [5, 5], (5.0, 5)])
+@pytest.mark.parametrize(
+    "grid_shape",
+    [(0, 5), (5, 0), (5,), [5, 5], (5.0, 5), (True, 5), (6, True)],
+)
 def test_generate_synthetic_run_rejects_invalid_grid_shape(grid_shape):
     with pytest.raises(ValueError, match="grid_shape must be a tuple of two positive integers"):
         list(generate_synthetic_run(frame_count=3, grid_shape=grid_shape, seed=123))
