@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-service
+  namespace: tdgl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-service
+  template:
+    metadata:
+      labels:
+        app: data-service
+    spec:
+      containers:
+        - name: data-service
+          image: kubeflow-tdgl-data:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: data-service-config
+            - configMapRef:
+                name: data-service-config
+          volumeMounts:
+            - name: zarr-data
+              mountPath: /data/zarr
+          livenessProbe:
+            httpGet:
+              path: /api/runs
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/runs
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: zarr-data
+          persistentVolumeClaim:
+            claimName: zarr-data
