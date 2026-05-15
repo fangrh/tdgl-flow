@@ -1,6 +1,8 @@
 import pytest
+from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 
+from tdgl_data.models import Frame, IVPoint, Run, RunEvent
 from tdgl_data.repository import (
     append_frame_record,
     complete_run,
@@ -56,13 +58,68 @@ def test_append_frame_record_creates_timeline_and_iv_point(session):
 
 
 def test_duplicate_frame_record_raises_integrity_error(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3), zarr_root="runs/r/frames.zarr")
-    append_frame_record(session, run_id=run.run_id, frame_index=0, time_value=0.0, je=0.0, voltage=0.0, zarr_group="g")
+    run = create_run(
+        session, solver_type="synthetic", grid_shape=(4, 3), zarr_root="runs/r/frames.zarr"
+    )
+    append_frame_record(
+        session,
+        run_id=run.run_id,
+        frame_index=0,
+        time_value=0.0,
+        je=0.0,
+        voltage=0.0,
+        zarr_group="g",
+    )
     session.commit()
 
-    append_frame_record(session, run_id=run.run_id, frame_index=0, time_value=0.1, je=0.1, voltage=0.1, zarr_group="g")
     with pytest.raises(IntegrityError):
-        session.commit()
+        append_frame_record(
+            session,
+            run_id=run.run_id,
+            frame_index=0,
+            time_value=0.1,
+            je=0.1,
+            voltage=0.1,
+            zarr_group="g",
+        )
+
+
+def test_append_frame_record_missing_run_raises_integrity_error(session):
+    with pytest.raises(IntegrityError):
+        append_frame_record(
+            session,
+            run_id="missing",
+            frame_index=0,
+            time_value=0.0,
+            je=0.0,
+            voltage=0.0,
+            zarr_group="g",
+        )
+
+
+def test_deleting_run_cascades_metadata_rows(session):
+    run = create_run(
+        session, solver_type="synthetic", grid_shape=(4, 3), zarr_root="runs/r/frames.zarr"
+    )
+    append_frame_record(
+        session,
+        run_id=run.run_id,
+        frame_index=0,
+        time_value=0.25,
+        je=1.5,
+        voltage=0.01,
+        zarr_group="runs/r/frames.zarr",
+    )
+    create_event(session, run.run_id, "frame_available", {"frame_index": 0})
+    session.commit()
+
+    session.execute(delete(Run).where(Run.run_id == run.run_id))
+    session.commit()
+
+    assert session.query(Run).count() == 0
+    assert session.query(Frame).count() == 0
+    assert session.query(IVPoint).count() == 0
+    assert session.query(RunEvent).count() == 0
 
 
 def test_complete_and_fail_run_status(session):

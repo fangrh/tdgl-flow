@@ -75,6 +75,7 @@ def append_frame_record(
         time_value=time_value,
     )
     session.add_all([frame, iv_point])
+    session.flush()
     return frame
 
 
