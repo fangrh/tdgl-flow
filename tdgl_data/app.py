@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, status
@@ -9,6 +10,22 @@ from tdgl_data.models import Base, Run
 from tdgl_data.repository import create_run, get_run, list_runs
 from tdgl_data.schemas import CreateRunRequest, RunResponse
 from tdgl_data.zarr_store import FilesystemZarrStore
+
+
+def _remove_zarr_store(zarr_store: FilesystemZarrStore, store_uri: str) -> None:
+    root = zarr_store.root.resolve()
+    path = (root / store_uri).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return
+
+    if path.exists():
+        shutil.rmtree(path)
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
 
 
 def _run_response(run: Run) -> RunResponse:
@@ -56,23 +73,31 @@ def create_app(
     @app.post("/api/runs", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
     def api_create_run(body: CreateRunRequest) -> RunResponse:
         with session_factory() as session:
-            run = create_run(
-                session,
-                solver_type=body.solver_type,
-                grid_shape=body.grid_shape,
-                zarr_root="pending",
-                device_params=body.device_params,
-                timing_params=body.timing_params,
-                metadata=body.metadata,
-                git_commit=body.git_commit,
-                image_tag=body.image_tag,
-            )
-            run.zarr_root = zarr_store.create_run_store(
-                run.run_id,
-                grid_shape=body.grid_shape,
-                fields=("psi_real", "psi_imag", "mu"),
-            )
-            session.commit()
+            created_store_uri: str | None = None
+            try:
+                run = create_run(
+                    session,
+                    solver_type=body.solver_type,
+                    grid_shape=body.grid_shape,
+                    zarr_root="pending",
+                    device_params=body.device_params,
+                    timing_params=body.timing_params,
+                    metadata=body.metadata,
+                    git_commit=body.git_commit,
+                    image_tag=body.image_tag,
+                )
+                created_store_uri = zarr_store.create_run_store(
+                    run.run_id,
+                    grid_shape=body.grid_shape,
+                    fields=("psi_real", "psi_imag", "mu"),
+                )
+                run.zarr_root = created_store_uri
+                session.commit()
+            except Exception:
+                session.rollback()
+                if created_store_uri is not None:
+                    _remove_zarr_store(zarr_store, created_store_uri)
+                raise
             session.refresh(run)
             return _run_response(run)
 

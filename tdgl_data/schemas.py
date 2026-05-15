@@ -1,9 +1,9 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PositiveInt
 
 
 class CreateRunRequest(BaseModel):
     solver_type: str = "synthetic"
-    grid_shape: tuple[int, int] = Field(default=(64, 64))
+    grid_shape: tuple[PositiveInt, PositiveInt] = Field(default=(64, 64))
     device_params: dict = Field(default_factory=dict)
     timing_params: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
