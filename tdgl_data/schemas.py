@@ -1,9 +1,13 @@
-from pydantic import BaseModel, Field, PositiveInt
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
 
 class CreateRunRequest(BaseModel):
     solver_type: str = "synthetic"
-    grid_shape: tuple[PositiveInt, PositiveInt] = Field(default=(64, 64))
+    grid_shape: tuple[StrictPositiveInt, StrictPositiveInt] = Field(default=(64, 64))
     device_params: dict = Field(default_factory=dict)
     timing_params: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)

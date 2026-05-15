@@ -74,7 +74,10 @@ def test_create_run_creates_zarr_store_under_configured_root(tmp_path):
     assert (zarr_root / body["zarr_root"] / "mu").exists()
 
 
-@pytest.mark.parametrize("grid_shape", [[-1, 3], [0, 3], [4, 0], [4, -2]])
+@pytest.mark.parametrize(
+    "grid_shape",
+    [[-1, 3], [0, 3], [4, 0], [4, -2], [True, 3], [3, True]],
+)
 def test_create_run_rejects_invalid_grid_shape_dimensions(client, grid_shape):
     response = client.post(
         "/api/runs",
