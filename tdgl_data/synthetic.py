@@ -23,7 +23,6 @@ class SyntheticFrame:
 
 
 def generate_synthetic_run(
-    *,
     frame_count: int,
     grid_shape: tuple[int, int],
     seed: int = 0,
@@ -37,7 +36,7 @@ def generate_synthetic_run(
     for frame_index in range(frame_count):
         time_value = frame_index * 0.1
         je = -1.0 + (2.0 * frame_index / max(frame_count - 1, 1))
-        voltage = 0.02 * je + 0.002 * np.sin(frame_index * 0.7)
+        voltage = 0.02 * je
         angle = 2.5 * xx + 1.7 * yy + time_value + phase_noise
         envelope = 0.75 + 0.2 * np.cos(np.pi * xx * yy + time_value)
         psi_real = (envelope * np.cos(angle)).astype("float32")
