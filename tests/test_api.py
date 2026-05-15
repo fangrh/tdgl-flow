@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event
 
 from tdgl_data.app import create_app
+from tdgl_data.dev_app import create_dev_app
 
 
 def test_create_and_get_run(client):
@@ -18,6 +19,40 @@ def test_create_and_get_run(client):
 
 def test_missing_run_returns_404(client):
     response = client.get("/api/runs/not-found")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Run not found"
+
+
+def test_delete_run_removes_database_record_and_zarr_store(tmp_path):
+    zarr_root = tmp_path / "zarr"
+    app = create_app(
+        database_url="sqlite+pysqlite:///:memory:",
+        zarr_root=zarr_root,
+        create_schema=True,
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/demo-runs",
+            json={"frame_count": 2, "grid_shape": [3, 4], "seed": 5},
+        )
+        assert created.status_code == 201
+        body = created.json()
+        run_id = body["run_id"]
+        store_path = zarr_root / body["zarr_root"]
+        assert store_path.exists()
+
+        deleted = client.delete(f"/api/runs/{run_id}")
+
+        assert deleted.status_code == 204
+        assert client.get(f"/api/runs/{run_id}").status_code == 404
+        assert client.get(f"/api/runs/{run_id}/timeline").status_code == 404
+        assert not store_path.exists()
+
+
+def test_delete_missing_run_returns_404(client):
+    response = client.delete("/api/runs/not-found")
+
     assert response.status_code == 404
     assert response.json()["detail"] == "Run not found"
 
@@ -117,6 +152,176 @@ def test_cors_uses_settings_allow_origins(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "https://client.test"
+
+
+def test_viewer_returns_html(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "TDGL Heatmap Viewer" in response.text
+
+
+def test_viewer_includes_iv_curve_plot(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="ivCanvas"' in response.text
+    assert 'I-V curve' in response.text
+    assert "drawIvPlot" in response.text
+    assert "/iv" in response.text
+
+
+def test_viewer_includes_fixed_global_colorbars(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="psiColorbar"' in response.text
+    assert 'id="muColorbar"' in response.text
+    assert "computePsiBounds" in response.text
+    assert "drawColorbar" in response.text
+    assert "psiBounds" in response.text
+
+
+def test_viewer_includes_static_tick_rendering(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert "drawHeatmapAxes" in response.text
+    assert "drawColorbarTicks" in response.text
+    assert "staticTickValues" in response.text
+    assert "heatmapPlotArea" in response.text
+
+
+def test_viewer_uses_single_row_plot_layout(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'class="plots plots-one-line"' in response.text
+    assert 'class="panel iv-panel"' in response.text
+    assert "plot-wide" not in response.text
+
+
+def test_viewer_uses_polished_iv_plot_rendering(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="ivCanvas" width="640" height="640"' in response.text
+    assert "ivPlotArea" in response.text
+    assert "drawIvGrid" in response.text
+    assert "drawIvAxes" in response.text
+    assert "drawIvCurve" in response.text
+    assert "drawIvAnnotation" in response.text
+    assert "lineJoin = \"round\"" in response.text
+
+
+def test_viewer_demo_creation_exposes_frame_and_grid_options(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="demoXSize"' in response.text
+    assert 'id="demoYSize"' in response.text
+    assert 'id="demoFrameCount"' in response.text
+    assert "demoRequestBody" in response.text
+    assert "frame_count: frameCount" in response.text
+    assert "grid_shape: [ySize, xSize]" in response.text
+
+
+def test_viewer_heatmap_size_follows_grid_aspect_ratio(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert "heatmapCanvasSize" in response.text
+    assert "canvas.style.aspectRatio" in response.text
+    assert "plotWidth" in response.text
+    assert "plotHeight" in response.text
+    assert "area.width" in response.text
+    assert "area.height" in response.text
+    assert "area.size" not in response.text
+
+
+def test_viewer_can_delete_selected_history_run(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="deleteRun"' in response.text
+    assert "deleteSelectedRun" in response.text
+    assert "confirm(" in response.text
+    assert "DELETE" in response.text
+    assert "`/api/runs/${state.runId}`" in response.text
+
+
+def test_viewer_playback_step_accepts_unbounded_numeric_skips(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="playbackStep"' in response.text
+    assert 'type="number"' in response.text
+    assert 'min="1"' in response.text
+    assert "playbackStepSize" in response.text
+    assert "nextFramePosition" in response.text
+    assert "state.frameIndex + playbackStepSize()" in response.text
+    assert "state.frameIndex - playbackStepSize()" in response.text
+
+
+def test_viewer_frame_bar_shows_fixed_loaded_frame_count(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert 'id="framePositionValue"' in response.text
+    assert "updateFramePositionLabel" in response.text
+    assert "`${position + 1} / ${state.frames.length}`" in response.text
+    assert 'els.framePositionValue.textContent = "0 / 0"' in response.text
+    assert 'Frame index' in response.text
+
+
+def test_viewer_sets_frame_bar_scale_before_scanning_frame_data(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    slider_max_index = response.text.index('els.frameSlider.max = String(state.frames.length - 1)')
+    psi_bounds_index = response.text.index("state.psiBounds = await computePsiBounds")
+    assert slider_max_index < psi_bounds_index
+
+
+def test_root_redirects_to_viewer(client):
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/viewer"
+
+
+def test_create_demo_run_writes_readable_heatmap_frames(client):
+    created = client.post(
+        "/api/demo-runs",
+        json={"frame_count": 3, "grid_shape": [4, 5], "seed": 7},
+    )
+
+    assert created.status_code == 201
+    run_id = created.json()["run_id"]
+
+    timeline = client.get(f"/api/runs/{run_id}/timeline")
+    assert timeline.status_code == 200
+    assert [frame["frame_index"] for frame in timeline.json()["frames"]] == [0, 1, 2]
+
+    frame = client.get(f"/api/runs/{run_id}/frames/1")
+    assert frame.status_code == 200
+    body = frame.json()
+    assert set(body["arrays"]) == {"psi_real", "psi_imag", "mu"}
+    assert len(body["arrays"]["mu"]) == 4
+    assert len(body["arrays"]["mu"][0]) == 5
+
+
+def test_dev_app_factory_creates_schema(tmp_path, monkeypatch):
+    monkeypatch.setenv("TDGL_DATABASE_URL", f"sqlite+pysqlite:///{tmp_path / 'viewer.db'}")
+    monkeypatch.setenv("TDGL_ZARR_ROOT", str(tmp_path / "zarr"))
+
+    app = create_dev_app()
+
+    with TestClient(app) as client:
+        response = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+
+    assert response.status_code == 201
 
 
 def test_create_run_cleans_up_zarr_store_when_commit_fails(tmp_path):
@@ -336,3 +541,76 @@ def test_read_frame_rejects_invalid_frame_index(client, frame_index):
     response = client.get(f"/api/runs/{run_id}/frames/{frame_index}")
 
     assert response.status_code == 422
+
+
+def test_append_frame_stores_frame_stats(client):
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    run_id = created.json()["run_id"]
+
+    response = client.post(
+        f"/api/runs/{run_id}/frames",
+        json={
+            "frame_index": 0,
+            "time_value": 0.1,
+            "je": 1.0,
+            "voltage": 0.03,
+            "psi_real": [[1.0, 0.5], [0.25, 0.0]],
+            "psi_imag": [[0.0, 0.5], [0.75, 1.0]],
+            "mu": [[-0.1, 0.0], [0.1, 0.2]],
+        },
+    )
+    assert response.status_code == 201
+    # Verify the frame has frame_stats set
+    from tdgl_data.repository import get_frame
+    session_factory = client.app.state.session_factory
+    with session_factory() as session:
+        frame = get_frame(session, run_id, 0)
+        assert frame is not None
+        assert frame.frame_stats is not None
+        assert "psi_real" in frame.frame_stats
+        assert "psi_imag" in frame.frame_stats
+        assert "mu" in frame.frame_stats
+        # Verify stats are computed correctly
+        assert frame.frame_stats["psi_real"]["min"] == 0.0
+        assert frame.frame_stats["psi_real"]["max"] == 1.0
+        assert frame.frame_stats["mu"]["min"] == pytest.approx(-0.1)
+        assert frame.frame_stats["mu"]["max"] == pytest.approx(0.2)
+
+
+def test_timeline_stats_use_cached_frame_stats_without_zarr_reads(client):
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    run_id = created.json()["run_id"]
+
+    client.post(
+        f"/api/runs/{run_id}/frames",
+        json={
+            "frame_index": 0,
+            "time_value": 0.0,
+            "je": 0.0,
+            "voltage": 0.0,
+            "psi_real": [[1.0, 2.0], [3.0, 4.0]],
+            "psi_imag": [[0.0, 0.0], [0.0, 0.0]],
+            "mu": [[0.5, 1.0], [1.5, 2.0]],
+        },
+    )
+    client.post(
+        f"/api/runs/{run_id}/frames",
+        json={
+            "frame_index": 1,
+            "time_value": 0.1,
+            "je": 1.0,
+            "voltage": 0.03,
+            "psi_real": [[-1.0, 0.0], [0.0, 5.0]],
+            "psi_imag": [[0.0, 0.0], [0.0, 0.0]],
+            "mu": [[-1.0, 0.0], [0.0, 3.0]],
+        },
+    )
+
+    timeline = client.get(f"/api/runs/{run_id}/timeline")
+    assert timeline.status_code == 200
+    stats = timeline.json()["stats"]
+
+    assert stats["psi_real"]["min"] == pytest.approx(-1.0)
+    assert stats["psi_real"]["max"] == pytest.approx(5.0)
+    assert stats["mu"]["min"] == pytest.approx(-1.0)
+    assert stats["mu"]["max"] == pytest.approx(3.0)

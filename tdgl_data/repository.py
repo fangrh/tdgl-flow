@@ -1,7 +1,6 @@
 from uuid import uuid4
 
-from sqlalchemy import delete
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from tdgl_data.models import Frame, IVPoint, Run, RunEvent, utcnow
@@ -44,6 +43,11 @@ def list_runs(session: Session) -> list[Run]:
     return list(session.scalars(select(Run).order_by(Run.created_at.desc())))
 
 
+def delete_run(session: Session, run: Run) -> None:
+    session.delete(run)
+    session.flush()
+
+
 def append_frame_record(
     session: Session,
     *,
@@ -54,6 +58,7 @@ def append_frame_record(
     voltage: float,
     zarr_group: str,
     checksum: str | None = None,
+    frame_stats: dict | None = None,
     status: str = "available",
 ) -> Frame:
     now = utcnow()
@@ -66,6 +71,7 @@ def append_frame_record(
         status=status,
         zarr_group=zarr_group,
         checksum=checksum,
+        frame_stats=frame_stats,
         created_at=now,
         committed_at=now,
     )
@@ -139,7 +145,11 @@ def create_event(session: Session, run_id: str, event_type: str, payload: dict) 
     return event
 
 
-def get_events_after(session: Session, run_id: str, last_event_id: int | None = None) -> list[RunEvent]:
+def get_events_after(
+    session: Session,
+    run_id: str,
+    last_event_id: int | None = None,
+) -> list[RunEvent]:
     stmt = select(RunEvent).where(RunEvent.run_id == run_id).order_by(RunEvent.event_id)
     if last_event_id is not None:
         stmt = stmt.where(RunEvent.event_id > last_event_id)
