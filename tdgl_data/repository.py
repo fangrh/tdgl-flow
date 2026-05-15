@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+from sqlalchemy import delete
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -53,6 +54,7 @@ def append_frame_record(
     voltage: float,
     zarr_group: str,
     checksum: str | None = None,
+    status: str = "available",
 ) -> Frame:
     now = utcnow()
     frame = Frame(
@@ -61,7 +63,7 @@ def append_frame_record(
         time_value=time_value,
         je=je,
         voltage=voltage,
-        status="available",
+        status=status,
         zarr_group=zarr_group,
         checksum=checksum,
         created_at=now,
@@ -77,6 +79,21 @@ def append_frame_record(
     session.add_all([frame, iv_point])
     session.flush()
     return frame
+
+
+def mark_frame_available(session: Session, frame: Frame) -> Frame:
+    frame.status = "available"
+    frame.committed_at = utcnow()
+    session.flush()
+    return frame
+
+
+def delete_frame_record(session: Session, run_id: str, frame_index: int) -> None:
+    session.execute(
+        delete(IVPoint).where(IVPoint.run_id == run_id, IVPoint.frame_index == frame_index)
+    )
+    session.execute(delete(Frame).where(Frame.run_id == run_id, Frame.frame_index == frame_index))
+    session.flush()
 
 
 def get_frame(session: Session, run_id: str, frame_index: int) -> Frame | None:

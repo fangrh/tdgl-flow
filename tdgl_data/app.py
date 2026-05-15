@@ -1,7 +1,8 @@
 import shutil
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Path as ApiPath, status
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 from sqlalchemy.exc import IntegrityError
@@ -12,11 +13,13 @@ from tdgl_data.models import Base, Frame, Run
 from tdgl_data.repository import (
     append_frame_record,
     create_run,
+    delete_frame_record,
     get_frame,
     get_iv_points,
     get_run,
     get_timeline,
     list_runs,
+    mark_frame_available,
 )
 from tdgl_data.schemas import (
     CreateRunRequest,
@@ -69,16 +72,31 @@ def _frame_metadata(frame: Frame) -> FrameMetadataResponse:
     )
 
 
-def _stats_value(value: np.floating | float) -> float:
-    return round(float(value), 7)
+def _grid_shape(run: Run) -> tuple[int, int]:
+    grid_shape = run.mesh_metadata.get("grid_shape")
+    if (
+        not isinstance(grid_shape, list)
+        or len(grid_shape) != 2
+        or not all(isinstance(value, int) for value in grid_shape)
+    ):
+        raise HTTPException(status_code=500, detail="Invalid run grid metadata")
+    return grid_shape[0], grid_shape[1]
 
 
-def _frame_arrays(body: FrameAppendRequest) -> dict[str, np.ndarray]:
-    return {
-        "psi_real": np.asarray(body.psi_real, dtype="float32"),
-        "psi_imag": np.asarray(body.psi_imag, dtype="float32"),
-        "mu": np.asarray(body.mu, dtype="float32"),
-    }
+def _frame_arrays(body: FrameAppendRequest, grid_shape: tuple[int, int]) -> dict[str, np.ndarray]:
+    arrays: dict[str, np.ndarray] = {}
+    for field in ("psi_real", "psi_imag", "mu"):
+        value = getattr(body, field)
+        try:
+            array = np.asarray(value, dtype="float32")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"{field} must be a rectangular 2D array") from exc
+        if array.ndim != 2:
+            raise HTTPException(status_code=422, detail=f"{field} must be a rectangular 2D array")
+        if array.shape != grid_shape:
+            raise HTTPException(status_code=422, detail=f"{field} shape must match run grid_shape")
+        arrays[field] = array
+    return arrays
 
 
 def _update_stats(
@@ -87,8 +105,8 @@ def _update_stats(
 ) -> None:
     for name, values in arrays.items():
         entry = stats.setdefault(name, {"min": float("inf"), "max": float("-inf")})
-        entry["min"] = min(entry["min"], _stats_value(np.min(values)))
-        entry["max"] = max(entry["max"], _stats_value(np.max(values)))
+        entry["min"] = min(entry["min"], float(np.min(values)))
+        entry["max"] = max(entry["max"], float(np.max(values)))
 
 
 def create_app(
@@ -170,7 +188,6 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     def api_append_frame(run_id: str, body: FrameAppendRequest) -> FrameMetadataResponse:
-        arrays = _frame_arrays(body)
         with session_factory() as session:
             run = get_run(session, run_id)
             if run is None:
@@ -178,7 +195,7 @@ def create_app(
             if get_frame(session, run_id, body.frame_index) is not None:
                 raise HTTPException(status_code=409, detail="Frame already exists")
 
-            zarr_store.append_frame(run_id, body.frame_index, arrays)
+            arrays = _frame_arrays(body, _grid_shape(run))
             try:
                 frame = append_frame_record(
                     session,
@@ -188,11 +205,26 @@ def create_app(
                     je=body.je,
                     voltage=body.voltage,
                     zarr_group=run.zarr_root,
+                    status="writing",
                 )
-                session.commit()
             except IntegrityError:
                 session.rollback()
                 raise HTTPException(status_code=409, detail="Frame already exists") from None
+            try:
+                zarr_store.append_frame(run_id, body.frame_index, arrays)
+            except Exception:
+                session.rollback()
+                raise
+            try:
+                mark_frame_available(session, frame)
+                session.commit()
+            except Exception:
+                session.rollback()
+                zarr_store.clear_frame(run_id, body.frame_index)
+                with session_factory() as cleanup_session:
+                    delete_frame_record(cleanup_session, run_id, body.frame_index)
+                    cleanup_session.commit()
+                raise
             return _frame_metadata(frame)
 
     @app.get("/api/runs/{run_id}/timeline", response_model=TimelineResponse)
@@ -200,7 +232,7 @@ def create_app(
         with session_factory() as session:
             if get_run(session, run_id) is None:
                 raise HTTPException(status_code=404, detail="Run not found")
-            frames = get_timeline(session, run_id)
+            frames = [frame for frame in get_timeline(session, run_id) if frame.status == "available"]
 
         stats: dict[str, dict[str, float]] = {}
         for frame in frames:
@@ -230,13 +262,17 @@ def create_app(
                     voltage=point.voltage,
                 )
                 for point in get_iv_points(session, run_id)
+                if get_frame(session, run_id, point.frame_index).status == "available"
             ]
 
     @app.get("/api/runs/{run_id}/frames/{frame_index}", response_model=FrameResponse)
-    def api_get_frame(run_id: str, frame_index: int) -> FrameResponse:
+    def api_get_frame(
+        run_id: str,
+        frame_index: Annotated[int, ApiPath(ge=0)],
+    ) -> FrameResponse:
         with session_factory() as session:
             frame = get_frame(session, run_id, frame_index)
-            if frame is None:
+            if frame is None or frame.status != "available":
                 raise HTTPException(status_code=404, detail="Frame not found")
             arrays = zarr_store.read_frame(
                 run_id,

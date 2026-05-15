@@ -105,6 +105,35 @@ class FilesystemZarrStore:
 
             arr[frame_index, :, :] = data
 
+    def clear_frame(self, run_id: str, frame_index: int) -> None:
+        if frame_index < 0:
+            raise ValueError("frame_index must be non-negative")
+
+        path = self._path(run_id)
+        if not path.exists():
+            return
+
+        root = zarr.open_group(str(path), mode="r+")
+        fields = tuple(root.array_keys())
+        if not fields:
+            return
+
+        frame_count = max(root[field].shape[0] for field in fields)
+        if frame_index >= frame_count:
+            return
+
+        if frame_index == frame_count - 1:
+            for field in fields:
+                arr = root[field]
+                if arr.shape[0] == frame_count:
+                    arr.resize(frame_index, *arr.shape[1:])
+            return
+
+        for field in fields:
+            arr = root[field]
+            if frame_index < arr.shape[0]:
+                arr[frame_index, :, :] = np.nan
+
     def read_frame(
         self,
         run_id: str,
