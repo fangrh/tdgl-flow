@@ -15,5 +15,10 @@ The first implemented subsystem is the TDGL data service:
 ```bash
 python -m pip install -e ".[dev]"
 pytest
+```
+
+After the FastAPI app task lands, run the service with:
+
+```bash
 uvicorn tdgl_data.app:create_app --factory --reload
 ```
