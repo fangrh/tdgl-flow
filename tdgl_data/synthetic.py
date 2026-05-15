@@ -27,6 +27,15 @@ def generate_synthetic_run(
     grid_shape: tuple[int, int],
     seed: int = 0,
 ) -> Iterator[SyntheticFrame]:
+    if not isinstance(frame_count, int) or frame_count <= 0:
+        raise ValueError("frame_count must be a positive integer")
+    if (
+        not isinstance(grid_shape, tuple)
+        or len(grid_shape) != 2
+        or not all(isinstance(value, int) and value > 0 for value in grid_shape)
+    ):
+        raise ValueError("grid_shape must be a tuple of two positive integers")
+
     rng = np.random.default_rng(seed)
     y = np.linspace(-1.0, 1.0, grid_shape[0], dtype="float32")
     x = np.linspace(-1.0, 1.0, grid_shape[1], dtype="float32")
