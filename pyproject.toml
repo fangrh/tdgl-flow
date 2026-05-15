@@ -29,10 +29,11 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["tdgl_data*"]
+include = ["tdgl_data*", "tdgl_generator*"]
 
 [tool.setuptools.package-data]
 tdgl_data = ["static/*.html"]
+tdgl_generator = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

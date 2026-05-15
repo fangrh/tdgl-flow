@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TDGL Data Generator</title>
+  <style>
+    :root {
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      background: #f6f7f9;
+      color: #1f2933;
+    }
+    body { margin: 0; }
+    main { max-width: 640px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 18px; font-size: 24px; font-weight: 650; }
+    fieldset { border: 1px solid #c8d0d9; border-radius: 6px; padding: 16px; margin: 0 0 16px; }
+    legend { font-weight: 600; color: #52606d; font-size: 14px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #52606d; }
+    input { min-height: 36px; border: 1px solid #c8d0d9; border-radius: 6px; padding: 0 12px; font: inherit; }
+    .actions { display: flex; gap: 10px; margin-bottom: 16px; }
+    button { min-height: 36px; border: 1px solid #c8d0d9; border-radius: 6px; background: #fff; font: inherit; padding: 0 16px; cursor: pointer; }
+    button.primary { border-color: #0f766e; background: #0f766e; color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status { border: 1px solid #d9e0e7; border-radius: 6px; background: #fff; padding: 12px; min-height: 120px; }
+    .status h2 { margin: 0 0 8px; font-size: 14px; font-weight: 650; }
+    .log { font-family: monospace; font-size: 13px; white-space: pre-wrap; color: #52606d; max-height: 200px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>TDGL Data Generator</h1>
+    <form id="generatorForm">
+      <fieldset>
+        <legend>Je sweep</legend>
+        <div class="grid">
+          <label>Je min <input id="jeMin" type="number" step="0.1" value="-1.0"></label>
+          <label>Je max <input id="jeMax" type="number" step="0.1" value="1.0"></label>
+          <label>Je count <input id="jeCount" type="number" min="1" value="10"></label>
+          <label>Frames per Je <input id="framesPerJe" type="number" min="1" value="5"></label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Simulation</legend>
+        <div class="grid">
+          <label>Grid Y <input id="gridY" type="number" min="1" value="72"></label>
+          <label>Grid X <input id="gridX" type="number" min="1" value="72"></label>
+          <label>Batch delay (s) <input id="delaySeconds" type="number" step="0.5" min="0" value="2.0"></label>
+        </div>
+      </fieldset>
+    </form>
+    <div class="actions">
+      <button id="startBtn" class="primary">Start</button>
+      <button id="stopBtn" disabled>Stop</button>
+    </div>
+    <div class="status">
+      <h2 id="statusLabel">Idle</h2>
+      <div id="logArea" class="log"></div>
+    </div>
+  </main>
+  <script>
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusLabel = document.getElementById("statusLabel");
+    const logArea = document.getElementById("logArea");
+    let pollTimer = null;
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, { headers: {"Content-Type": "application/json"}, ...options });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`${response.status}: ${text}`);
+      }
+      return response.json();
+    }
+
+    function getParams() {
+      return {
+        je_min: parseFloat(document.getElementById("jeMin").value) || -1.0,
+        je_max: parseFloat(document.getElementById("jeMax").value) || 1.0,
+        je_count: parseInt(document.getElementById("jeCount").value) || 10,
+        frames_per_je: parseInt(document.getElementById("framesPerJe").value) || 5,
+        grid_y: parseInt(document.getElementById("gridY").value) || 72,
+        grid_x: parseInt(document.getElementById("gridX").value) || 72,
+        delay_seconds: parseFloat(document.getElementById("delaySeconds").value) || 2.0,
+      };
+    }
+
+    async function pollStatus() {
+      try {
+        const data = await requestJson("/api/status");
+        statusLabel.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+        logArea.textContent = data.log.join("\n");
+        logArea.scrollTop = logArea.scrollHeight;
+        const running = data.status === "running";
+        startBtn.disabled = running;
+        stopBtn.disabled = !running;
+        if (running && !pollTimer) {
+          pollTimer = setInterval(pollStatus, 1000);
+        }
+        if (!running && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      } catch (error) {
+        logArea.textContent += "\nPoll error: " + error.message;
+      }
+    }
+
+    startBtn.addEventListener("click", async () => {
+      try {
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        await requestJson("/api/generate", {
+          method: "POST",
+          body: JSON.stringify(getParams()),
+        });
+        pollTimer = setInterval(pollStatus, 1000);
+      } catch (error) {
+        statusLabel.textContent = "Error";
+        logArea.textContent = error.message;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    });
+
+    stopBtn.addEventListener("click", async () => {
+      try {
+        await requestJson("/api/stop", { method: "POST" });
+        await pollStatus();
+      } catch (error) {
+        logArea.textContent += "\nStop error: " + error.message;
+      }
+    });
+
+    pollStatus();
+  </script>
+</body>
+</html>
