@@ -1,0 +1,128 @@
+from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from tdgl_data.models import Frame, IVPoint, Run, RunEvent, utcnow
+
+
+def create_run(
+    session: Session,
+    *,
+    solver_type: str,
+    grid_shape: tuple[int, int],
+    zarr_root: str,
+    device_params: dict | None = None,
+    timing_params: dict | None = None,
+    metadata: dict | None = None,
+    git_commit: str | None = None,
+    image_tag: str | None = None,
+) -> Run:
+    run = Run(
+        run_id=str(uuid4()),
+        solver_type=solver_type,
+        status="created",
+        mesh_metadata={"grid_shape": list(grid_shape)},
+        zarr_root=zarr_root,
+        device_params=device_params or {},
+        timing_params=timing_params or {},
+        metadata_=metadata or {},
+        git_commit=git_commit,
+        image_tag=image_tag,
+    )
+    session.add(run)
+    session.flush()
+    return run
+
+
+def get_run(session: Session, run_id: str) -> Run | None:
+    return session.get(Run, run_id)
+
+
+def list_runs(session: Session) -> list[Run]:
+    return list(session.scalars(select(Run).order_by(Run.created_at.desc())))
+
+
+def append_frame_record(
+    session: Session,
+    *,
+    run_id: str,
+    frame_index: int,
+    time_value: float,
+    je: float,
+    voltage: float,
+    zarr_group: str,
+    checksum: str | None = None,
+) -> Frame:
+    now = utcnow()
+    frame = Frame(
+        run_id=run_id,
+        frame_index=frame_index,
+        time_value=time_value,
+        je=je,
+        voltage=voltage,
+        status="available",
+        zarr_group=zarr_group,
+        checksum=checksum,
+        created_at=now,
+        committed_at=now,
+    )
+    iv_point = IVPoint(
+        run_id=run_id,
+        frame_index=frame_index,
+        je=je,
+        voltage=voltage,
+        time_value=time_value,
+    )
+    session.add_all([frame, iv_point])
+    return frame
+
+
+def get_frame(session: Session, run_id: str, frame_index: int) -> Frame | None:
+    stmt = select(Frame).where(Frame.run_id == run_id, Frame.frame_index == frame_index)
+    return session.scalar(stmt)
+
+
+def get_timeline(session: Session, run_id: str) -> list[Frame]:
+    stmt = select(Frame).where(Frame.run_id == run_id).order_by(Frame.frame_index)
+    return list(session.scalars(stmt))
+
+
+def get_iv_points(session: Session, run_id: str) -> list[IVPoint]:
+    stmt = select(IVPoint).where(IVPoint.run_id == run_id).order_by(IVPoint.frame_index)
+    return list(session.scalars(stmt))
+
+
+def complete_run(session: Session, run_id: str) -> Run:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise LookupError(f"Run {run_id} not found")
+    run.status = "completed"
+    run.completed_at = utcnow()
+    session.flush()
+    return run
+
+
+def fail_run(session: Session, run_id: str, message: str) -> Run:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise LookupError(f"Run {run_id} not found")
+    run.status = "failed"
+    run.completed_at = utcnow()
+    run.metadata_ = {**run.metadata_, "failure_message": message}
+    session.flush()
+    return run
+
+
+def create_event(session: Session, run_id: str, event_type: str, payload: dict) -> RunEvent:
+    event = RunEvent(run_id=run_id, event_type=event_type, payload=payload)
+    session.add(event)
+    session.flush()
+    return event
+
+
+def get_events_after(session: Session, run_id: str, last_event_id: int | None = None) -> list[RunEvent]:
+    stmt = select(RunEvent).where(RunEvent.run_id == run_id).order_by(RunEvent.event_id)
+    if last_event_id is not None:
+        stmt = stmt.where(RunEvent.event_id > last_event_id)
+    return list(session.scalars(stmt))
