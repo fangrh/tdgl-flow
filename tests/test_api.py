@@ -178,7 +178,7 @@ def test_viewer_includes_fixed_global_colorbars(client):
     assert response.status_code == 200
     assert 'id="psiColorbar"' in response.text
     assert 'id="muColorbar"' in response.text
-    assert "computePsiBounds" in response.text
+    assert "adaptivePsiBounds" in response.text
     assert "drawColorbar" in response.text
     assert "psiBounds" in response.text
 
@@ -275,13 +275,35 @@ def test_viewer_frame_bar_shows_fixed_loaded_frame_count(client):
     assert 'Frame index' in response.text
 
 
-def test_viewer_sets_frame_bar_scale_before_scanning_frame_data(client):
+def test_viewer_sets_frame_bar_scale_before_loading_first_frame(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
     slider_max_index = response.text.index('els.frameSlider.max = String(state.frames.length - 1)')
-    psi_bounds_index = response.text.index("state.psiBounds = await computePsiBounds")
-    assert slider_max_index < psi_bounds_index
+    controls_enabled_index = response.text.index("setControlsEnabled(true)")
+    assert slider_max_index < controls_enabled_index
+
+
+def test_viewer_uses_adaptive_psi_colorbars(client):
+    response = client.get("/viewer")
+    assert response.status_code == 200
+    assert "computePsiBounds" not in response.text
+    assert "expandBounds" not in response.text
+    assert "adaptivePsiBounds" in response.text
+
+
+def test_viewer_includes_frame_buffer(client):
+    response = client.get("/viewer")
+    assert response.status_code == 200
+    assert "frameBuffer" in response.text
+    assert "fillBuffer" in response.text
+    assert "BUFFER_RADIUS" in response.text
+
+
+def test_viewer_includes_playback_speed_control(client):
+    response = client.get("/viewer")
+    assert response.status_code == 200
+    assert 'id="playbackSpeed"' in response.text
 
 
 def test_root_redirects_to_viewer(client):
