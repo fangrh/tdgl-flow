@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event
@@ -556,6 +557,46 @@ def test_sse_endpoint_exists_for_valid_run(client):
 
     response = client.head(f"/api/runs/{run_id}/events")
     assert response.status_code != 404
+
+
+def test_viewer_supports_live_updates(client):
+    response = client.get("/viewer")
+    assert response.status_code == 200
+    assert "EventSource" in response.text
+
+
+def test_frame_arrays_roundtrip_through_zarr(client):
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    run_id = created.json()["run_id"]
+
+    frame_body = {
+        "frame_index": 0,
+        "time_value": 0.5,
+        "je": 1.0,
+        "voltage": 0.02,
+        "psi_real": [[1.0, 2.0], [3.0, 4.0]],
+        "psi_imag": [[-1.0, -2.0], [-3.0, -4.0]],
+        "mu": [[0.1, 0.2], [0.3, 0.4]],
+    }
+    appended = client.post(f"/api/runs/{run_id}/frames", json=frame_body)
+    assert appended.status_code == 201
+
+    from tdgl_data.repository import get_frame
+    session_factory = client.app.state.session_factory
+    with session_factory() as session:
+        frame = get_frame(session, run_id, 0)
+        assert frame is not None
+        assert frame.zarr_exists is True
+        assert frame.psi_real is None
+        assert frame.psi_imag is None
+        assert frame.mu is None
+
+    resp = client.get(f"/api/runs/{run_id}/frames/0")
+    assert resp.status_code == 200
+    arrays = resp.json()["arrays"]
+    assert np.allclose(arrays["psi_real"], [[1.0, 2.0], [3.0, 4.0]])
+    assert np.allclose(arrays["psi_imag"], [[-1.0, -2.0], [-3.0, -4.0]])
+    assert np.allclose(arrays["mu"], [[0.1, 0.2], [0.3, 0.4]])
 
 
 def test_viewer_supports_live_updates(client):
