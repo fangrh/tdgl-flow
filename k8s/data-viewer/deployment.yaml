@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-viewer
+  namespace: tdgl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-viewer
+  template:
+    metadata:
+      labels:
+        app: data-viewer
+    spec:
+      containers:
+        - name: data-viewer
+          image: ghcr.io/fangrh/tdgl-flow:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: data-viewer-config
+          livenessProbe:
+            httpGet:
+              path: /api/runs
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/runs
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

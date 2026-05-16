@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tdgl-generator
+  namespace: tdgl
+  labels:
+    app: tdgl-generator
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: tdgl-generator
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: generator
+          image: ghcr.io/fangrh/tdgl-flow:latest
+          command:
+            - python
+            - -m
+            - tdgl_generator.cli
+            - --data-service-url=http://data-viewer.tdgl.svc.cluster.local
+          env:
+            - name: TDGL_JE_MIN
+              value: "-1.0"
+            - name: TDGL_JE_MAX
+              value: "1.0"
+            - name: TDGL_JE_COUNT
+              value: "10"
+            - name: TDGL_FRAMES_PER_JE
+              value: "5"
+            - name: TDGL_DELAY
+              value: "2.0"
+            - name: TDGL_GRID_Y
+              value: "72"
+            - name: TDGL_GRID_X
+              value: "72"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"

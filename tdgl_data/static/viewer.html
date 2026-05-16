@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TDGL Heatmap Viewer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      color: #1f2933;
+    }
+    body { margin: 0; }
+    main { max-width: 1480px; margin: 0 auto; padding: 24px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 24px; font-weight: 650; }
+    .toolbar, .timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+    button, select, input[type="number"] {
+      min-height: 36px;
+      border: 1px solid #c8d0d9;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #1f2933;
+      font: inherit;
+      padding: 0 12px;
+    }
+    input[type="number"] { width: 76px; }
+    button { cursor: pointer; }
+    button.primary { border-color: #0f766e; background: #0f766e; color: #ffffff; }
+    button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: 0.55; }
+    input[type="range"] { flex: 1 1 320px; min-width: 180px; }
+    .demo-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .demo-options label { display: inline-flex; align-items: center; gap: 5px; color: #52606d; font-size: 13px; }
+    .meta { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; margin: 14px 0 18px; }
+    .metric { border: 1px solid #d9e0e7; border-radius: 6px; background: #ffffff; padding: 10px 12px; }
+    .metric span { display: block; color: #667381; font-size: 12px; margin-bottom: 4px; }
+    .metric strong { font-size: 16px; font-weight: 650; }
+    .plots { display: grid; gap: 16px; }
+    .plots-one-line { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(340px, 1.15fr); align-items: start; }
+    .panel { min-width: 0; }
+    .panel h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
+    .heatmap-frame { display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 10px; align-items: stretch; }
+    canvas {
+      display: block;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      border: 1px solid #c8d0d9;
+      border-radius: 6px;
+      background: #ffffff;
+      image-rendering: pixelated;
+    }
+    .colorbar-wrap { display: grid; grid-template-rows: 1fr auto; gap: 6px; min-width: 0; }
+    .colorbar-wrap canvas { aspect-ratio: auto; height: 100%; min-height: 180px; }
+    .colorbar-labels { display: grid; gap: 4px; color: #52606d; font-size: 12px; text-align: center; }
+    .status { min-height: 22px; color: #52606d; margin-top: 12px; }
+    .status.error { color: #b42318; }
+    @media (max-width: 760px) {
+      main { padding: 16px; }
+      header, .plots, .plots-one-line { grid-template-columns: 1fr; display: grid; }
+      .meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .heatmap-frame { grid-template-columns: minmax(0, 1fr) 46px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>TDGL Heatmap Viewer</h1>
+      <div class="demo-options" aria-label="Demo run options">
+        <label>X size <input id="demoXSize" type="number" min="1" max="512" value="72"></label>
+        <label>Y size <input id="demoYSize" type="number" min="1" max="512" value="72"></label>
+        <label>Frames <input id="demoFrameCount" type="number" min="1" max="500" value="24"></label>
+        <button id="createDemo" class="primary">Create demo</button>
+      </div>
+    </header>
+    <section class="toolbar" aria-label="Run controls">
+      <select id="runSelect" aria-label="Run"></select>
+      <button id="refreshRuns">Refresh</button>
+      <button id="deleteRun" disabled>Delete</button>
+    </section>
+    <section class="timeline" aria-label="Frame controls">
+      <button id="prevFrame" title="Previous frame">Prev</button>
+      <button id="playPause" title="Play or pause">Play</button>
+      <button id="nextFrame" title="Next frame">Next</button>
+      <label>Step <input id="playbackStep" type="number" min="1" value="1" aria-label="Playback step"></label>
+      <label>Speed <select id="playbackSpeed" aria-label="Playback speed">
+        <option value="250">1x</option>
+        <option value="125">2x</option>
+        <option value="60">4x</option>
+        <option value="30">8x</option>
+      </select></label>
+      <label><input id="autoFollow" type="checkbox" checked> Auto-follow</label>
+      <input id="frameSlider" type="range" min="0" max="0" value="0" disabled aria-label="Frame">
+      <span id="framePositionValue">0 / 0</span>
+    </section>
+    <section class="meta" aria-label="Frame metadata">
+      <div class="metric"><span>Frame index</span><strong id="frameValue">-</strong></div>
+      <div class="metric"><span>Time</span><strong id="timeValue">-</strong></div>
+      <div class="metric"><span>Je</span><strong id="jeValue">-</strong></div>
+      <div class="metric"><span>Voltage</span><strong id="voltageValue">-</strong></div>
+    </section>
+    <section class="plots plots-one-line" aria-label="Plots">
+      <div class="panel">
+        <h2>|psi|</h2>
+        <div class="heatmap-frame">
+          <canvas id="psiCanvas" width="512" height="512"></canvas>
+          <div class="colorbar-wrap">
+            <canvas id="psiColorbar" width="40" height="512"></canvas>
+            <div class="colorbar-labels">
+              <span id="psiColorbarMax">-</span>
+              <span id="psiColorbarMin">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>mu</h2>
+        <div class="heatmap-frame">
+          <canvas id="muCanvas" width="512" height="512"></canvas>
+          <div class="colorbar-wrap">
+            <canvas id="muColorbar" width="40" height="512"></canvas>
+            <div class="colorbar-labels">
+              <span id="muColorbarMax">-</span>
+              <span id="muColorbarMin">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel iv-panel">
+        <h2>I-V curve</h2>
+        <canvas id="ivCanvas" width="640" height="640"></canvas>
+      </div>
+    </section>
+    <div id="status" class="status"></div>
+  </main>
+  <script>
+    const BUFFER_RADIUS = 5;
+
+    const state = {
+      runs: [],
+      runId: null,
+      timeline: null,
+      iv: [],
+      frames: [],
+      frameIndex: 0,
+      psiBounds: null,
+      playing: false,
+      timer: null,
+      frameBuffer: new Map(),
+      eventSource: null,
+    };
+    const els = {
+      createDemo: document.getElementById("createDemo"),
+      demoXSize: document.getElementById("demoXSize"),
+      demoYSize: document.getElementById("demoYSize"),
+      demoFrameCount: document.getElementById("demoFrameCount"),
+      refreshRuns: document.getElementById("refreshRuns"),
+      deleteRun: document.getElementById("deleteRun"),
+      runSelect: document.getElementById("runSelect"),
+      frameSlider: document.getElementById("frameSlider"),
+      playbackStep: document.getElementById("playbackStep"),
+      playbackSpeed: document.getElementById("playbackSpeed"),
+      autoFollow: document.getElementById("autoFollow"),
+      framePositionValue: document.getElementById("framePositionValue"),
+      prevFrame: document.getElementById("prevFrame"),
+      playPause: document.getElementById("playPause"),
+      nextFrame: document.getElementById("nextFrame"),
+      frameValue: document.getElementById("frameValue"),
+      timeValue: document.getElementById("timeValue"),
+      jeValue: document.getElementById("jeValue"),
+      voltageValue: document.getElementById("voltageValue"),
+      psiCanvas: document.getElementById("psiCanvas"),
+      muCanvas: document.getElementById("muCanvas"),
+      psiColorbar: document.getElementById("psiColorbar"),
+      muColorbar: document.getElementById("muColorbar"),
+      psiColorbarMax: document.getElementById("psiColorbarMax"),
+      psiColorbarMin: document.getElementById("psiColorbarMin"),
+      muColorbarMax: document.getElementById("muColorbarMax"),
+      muColorbarMin: document.getElementById("muColorbarMin"),
+      ivCanvas: document.getElementById("ivCanvas"),
+      status: document.getElementById("status"),
+    };
+
+    function setStatus(message, isError = false) {
+      els.status.textContent = message;
+      els.status.classList.toggle("error", isError);
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, { headers: {"Content-Type": "application/json"}, ...options });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`${response.status} ${response.statusText}: ${text}`);
+      }
+      if (response.status === 204) return null;
+      return response.json();
+    }
+
+    function positiveIntegerFromInput(input, fallback) {
+      const value = Number.parseInt(input.value, 10);
+      return Number.isFinite(value) && value > 0 ? value : fallback;
+    }
+
+    function demoRequestBody() {
+      const xSize = positiveIntegerFromInput(els.demoXSize, 72);
+      const ySize = positiveIntegerFromInput(els.demoYSize, 72);
+      const frameCount = positiveIntegerFromInput(els.demoFrameCount, 24);
+      return {
+        frame_count: frameCount,
+        grid_shape: [ySize, xSize],
+        seed: Date.now() % 100000,
+      };
+    }
+
+    function formatNumber(value) {
+      if (value === undefined || value === null) return "-";
+      return Number(value).toPrecision(4);
+    }
+
+    function minMax(values) {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const row of values) {
+        for (const value of row) {
+          min = Math.min(min, value);
+          max = Math.max(max, value);
+        }
+      }
+      return {min, max};
+    }
+
+    function color(value, min, max) {
+      const span = max - min || 1;
+      const t = Math.max(0, Math.min(1, (value - min) / span));
+      const r = Math.round(33 + 222 * t);
+      const g = Math.round(48 + 120 * (1 - Math.abs(t - 0.5) * 2));
+      const b = Math.round(80 + 150 * (1 - t));
+      return [r, g, b, 255];
+    }
+
+    function staticTickValues(min, max, count = 5) {
+      if (count <= 1) return [min];
+      return Array.from({length: count}, (_, index) => min + ((max - min) * index / (count - 1)));
+    }
+
+    function heatmapCanvasSize(rows, cols) {
+      const maxPlotSide = 500;
+      const plotWidth = cols >= rows ? maxPlotSide : Math.max(1, Math.round(maxPlotSide * cols / rows));
+      const plotHeight = rows >= cols ? maxPlotSide : Math.max(1, Math.round(maxPlotSide * rows / cols));
+      return {
+        width: plotWidth + 58,
+        height: plotHeight + 58,
+        plotWidth,
+        plotHeight,
+      };
+    }
+
+    function heatmapPlotArea(canvas) {
+      return {
+        left: 46,
+        top: 16,
+        width: canvas.width - 58,
+        height: canvas.height - 58,
+      };
+    }
+
+    function drawHeatmapAxes(ctx, canvas, rows, cols, area) {
+      const xMax = Math.max(cols - 1, 0);
+      const yMax = Math.max(rows - 1, 0);
+      const xTicks = [0, Math.floor(xMax / 2), xMax];
+      const yTicks = [0, Math.floor(yMax / 2), yMax];
+
+      ctx.strokeStyle = "#52606d";
+      ctx.fillStyle = "#52606d";
+      ctx.lineWidth = 1;
+      ctx.font = "12px system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+
+      ctx.beginPath();
+      ctx.rect(area.left, area.top, area.width, area.height);
+      ctx.stroke();
+
+      for (const tick of xTicks) {
+        const x = area.left + (xMax ? tick / xMax : 0) * area.width;
+        ctx.beginPath();
+        ctx.moveTo(x, area.top + area.height);
+        ctx.lineTo(x, area.top + area.height + 5);
+        ctx.stroke();
+        ctx.fillText(String(tick), x, area.top + area.height + 8);
+      }
+
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (const tick of yTicks) {
+        const y = area.top + (yMax ? tick / yMax : 0) * area.height;
+        ctx.beginPath();
+        ctx.moveTo(area.left - 5, y);
+        ctx.lineTo(area.left, y);
+        ctx.stroke();
+        ctx.fillText(String(tick), area.left - 8, y);
+      }
+    }
+
+    function drawHeatmap(canvas, values, bounds = null) {
+      const rows = values.length;
+      const cols = values[0]?.length || 0;
+      if (!rows || !cols) return;
+      const canvasSize = heatmapCanvasSize(rows, cols);
+      canvas.width = canvasSize.width;
+      canvas.height = canvasSize.height;
+      canvas.style.aspectRatio = `${canvasSize.width} / ${canvasSize.height}`;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const area = heatmapPlotArea(canvas);
+      const image = ctx.createImageData(cols, rows);
+      const range = bounds || minMax(values);
+      let offset = 0;
+      for (let y = 0; y < rows; y += 1) {
+        for (let x = 0; x < cols; x += 1) {
+          const rgba = color(values[y][x], range.min, range.max);
+          image.data[offset++] = rgba[0];
+          image.data[offset++] = rgba[1];
+          image.data[offset++] = rgba[2];
+          image.data[offset++] = rgba[3];
+        }
+      }
+
+      const bitmap = document.createElement("canvas");
+      bitmap.width = cols;
+      bitmap.height = rows;
+      bitmap.getContext("2d").putImageData(image, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(bitmap, area.left, area.top, area.width, area.height);
+      drawHeatmapAxes(ctx, canvas, rows, cols, area);
+    }
+
+    function updateColorbarLabels(prefix, bounds) {
+      els[`${prefix}ColorbarMax`].textContent = formatNumber(bounds?.max);
+      els[`${prefix}ColorbarMin`].textContent = formatNumber(bounds?.min);
+    }
+
+    function drawColorbarTicks(ctx, canvas, bounds) {
+      const ticks = staticTickValues(bounds.min, bounds.max, 5);
+      ctx.strokeStyle = "#1f2933";
+      ctx.fillStyle = "#1f2933";
+      ctx.lineWidth = 1;
+      ctx.font = "12px system-ui";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      for (const tick of ticks) {
+        const y = 8 + ((bounds.max - tick) / (bounds.max - bounds.min || 1)) * (canvas.height - 16);
+        ctx.beginPath();
+        ctx.moveTo(40, y);
+        ctx.lineTo(47, y);
+        ctx.stroke();
+        ctx.fillText(formatNumber(tick), 50, y);
+      }
+    }
+
+    function drawColorbar(canvas, bounds, labelPrefix) {
+      canvas.width = 112;
+      canvas.height = 512;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!bounds) {
+        updateColorbarLabels(labelPrefix, null);
+        return;
+      }
+
+      const image = ctx.createImageData(canvas.width, canvas.height);
+      let offset = 0;
+      for (let y = 0; y < canvas.height; y += 1) {
+        const value = bounds.max - ((bounds.max - bounds.min) * y / (canvas.height - 1 || 1));
+        const rgba = color(value, bounds.min, bounds.max);
+        for (let x = 0; x < 40; x += 1) {
+          image.data[offset++] = rgba[0];
+          image.data[offset++] = rgba[1];
+          image.data[offset++] = rgba[2];
+          image.data[offset++] = rgba[3];
+        }
+        for (let x = 40; x < canvas.width; x += 1) {
+          image.data[offset++] = 255;
+          image.data[offset++] = 255;
+          image.data[offset++] = 255;
+          image.data[offset++] = 255;
+        }
+      }
+      ctx.putImageData(image, 0, 0);
+      drawColorbarTicks(ctx, canvas, bounds);
+      updateColorbarLabels(labelPrefix, bounds);
+    }
+
+    function padRange(range) {
+      const span = range.max - range.min || 1;
+      return {min: range.min - span * 0.08, max: range.max + span * 0.08};
+    }
+
+    function ivPlotArea(canvas) {
+      return {
+        left: 70,
+        right: canvas.width - 24,
+        top: 26,
+        bottom: canvas.height - 62,
+      };
+    }
+
+    function ivScales(area, xRange, yRange) {
+      const width = area.right - area.left;
+      const height = area.bottom - area.top;
+      return {
+        xFor: (je) => area.left + ((je - xRange.min) / (xRange.max - xRange.min || 1)) * width,
+        yFor: (voltage) => area.bottom - ((voltage - yRange.min) / (yRange.max - yRange.min || 1)) * height,
+      };
+    }
+
+    function drawIvGrid(ctx, area, xRange, yRange, scales) {
+      const xTicks = staticTickValues(xRange.min, xRange.max, 5);
+      const yTicks = staticTickValues(yRange.min, yRange.max, 5);
+      ctx.strokeStyle = "#e6ebf0";
+      ctx.lineWidth = 1;
+
+      for (const tick of xTicks) {
+        const x = scales.xFor(tick);
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+      }
+
+      for (const tick of yTicks) {
+        const y = scales.yFor(tick);
+        ctx.beginPath();
+        ctx.moveTo(area.left, y);
+        ctx.lineTo(area.right, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawIvAxes(ctx, canvas, area, xRange, yRange, scales) {
+      const xTicks = staticTickValues(xRange.min, xRange.max, 5);
+      const yTicks = staticTickValues(yRange.min, yRange.max, 5);
+      ctx.strokeStyle = "#667381";
+      ctx.fillStyle = "#52606d";
+      ctx.lineWidth = 1;
+      ctx.font = "12px system-ui";
+
+      ctx.beginPath();
+      ctx.rect(area.left, area.top, area.right - area.left, area.bottom - area.top);
+      ctx.stroke();
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (const tick of xTicks) {
+        const x = scales.xFor(tick);
+        ctx.beginPath();
+        ctx.moveTo(x, area.bottom);
+        ctx.lineTo(x, area.bottom + 5);
+        ctx.stroke();
+        ctx.fillText(formatNumber(tick), x, area.bottom + 8);
+      }
+
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (const tick of yTicks) {
+        const y = scales.yFor(tick);
+        ctx.beginPath();
+        ctx.moveTo(area.left - 5, y);
+        ctx.lineTo(area.left, y);
+        ctx.stroke();
+        ctx.fillText(formatNumber(tick), area.left - 8, y);
+      }
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText("Je", area.left + (area.right - area.left) / 2, canvas.height - 8);
+      ctx.save();
+      ctx.translate(16, area.top + (area.bottom - area.top) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText("Voltage", 0, 0);
+      ctx.restore();
+    }
+
+    function drawIvCurve(ctx, points, scales) {
+      ctx.strokeStyle = "#0f766e";
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        const x = scales.xFor(point.je);
+        const y = scales.yFor(point.voltage);
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+
+      ctx.fillStyle = "#0f766e";
+      for (const point of points) {
+        ctx.beginPath();
+        ctx.arc(scales.xFor(point.je), scales.yFor(point.voltage), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawIvAnnotation(ctx, point, scales) {
+      if (!point) return;
+      const dotX = scales.xFor(point.je);
+      const dotY = scales.yFor(point.voltage);
+      ctx.fillStyle = "#d92d20";
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function drawIvPlot(currentFrameIndex = null) {
+      const canvas = els.ivCanvas;
+      canvas.width = 640;
+      canvas.height = 640;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!state.iv.length) return;
+
+      const area = ivPlotArea(canvas);
+      const xRange = padRange({
+        min: Math.min(...state.iv.map((point) => point.je)),
+        max: Math.max(...state.iv.map((point) => point.je)),
+      });
+      const yRange = padRange({
+        min: Math.min(...state.iv.map((point) => point.voltage)),
+        max: Math.max(...state.iv.map((point) => point.voltage)),
+      });
+      const scales = ivScales(area, xRange, yRange);
+
+      const currentPoint = state.iv.find((point) => point.frame_index === currentFrameIndex);
+      drawIvGrid(ctx, area, xRange, yRange, scales);
+      drawIvAxes(ctx, canvas, area, xRange, yRange, scales);
+      drawIvCurve(ctx, state.iv, scales);
+      drawIvAnnotation(ctx, currentPoint, scales);
+    }
+
+    function clearCanvas(canvas) {
+      canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function psiMagnitude(arrays) {
+      return arrays.psi_real.map((row, y) => row.map((real, x) => Math.hypot(real, arrays.psi_imag[y][x])));
+    }
+
+    function adaptivePsiBounds(current, arrays) {
+      const frameBounds = minMax(psiMagnitude(arrays));
+      if (!current) return frameBounds;
+      const expanded = {
+        min: Math.min(current.min, frameBounds.min),
+        max: Math.max(current.max, frameBounds.max),
+      };
+      return (expanded.min === current.min && expanded.max === current.max) ? current : expanded;
+    }
+
+    async function fillBuffer(centerPosition) {
+      const total = state.frames.length;
+      const low = Math.max(0, centerPosition - BUFFER_RADIUS);
+      const high = Math.min(total - 1, centerPosition + BUFFER_RADIUS);
+      for (let pos = low; pos <= high; pos += 1) {
+        if (state.frameBuffer.has(pos)) continue;
+        const metadata = state.frames[pos];
+        try {
+          const frame = await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
+          state.frameBuffer.set(pos, frame);
+        } catch (_error) {
+          // skip failed prefetch
+        }
+      }
+      for (const key of state.frameBuffer.keys()) {
+        if (key < centerPosition - BUFFER_RADIUS * 2 || key > centerPosition + BUFFER_RADIUS * 2) {
+          state.frameBuffer.delete(key);
+        }
+      }
+    }
+
+    function closeEventSource() {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
+    }
+
+    function openEventSource(runId) {
+      closeEventSource();
+      state.eventSource = new EventSource(`/api/runs/${runId}/events`);
+      state.eventSource.addEventListener("frame_available", (event) => {
+        const data = JSON.parse(event.data);
+        const existing = state.frames.find(f => f.frame_index === data.frame_index);
+        if (existing) return;
+        state.frames.push({
+          frame_index: data.frame_index,
+          time_value: data.time_value,
+          je: data.je,
+          voltage: data.voltage,
+          status: "available",
+        });
+        els.frameSlider.max = String(state.frames.length - 1);
+        updateFramePositionLabel(state.frameIndex);
+        if (els.autoFollow.checked) {
+          loadFrame(state.frames.length - 1);
+        }
+        setStatus(`Frame ${data.frame_index} arrived (${data.frame_count} total).`);
+      });
+      state.eventSource.onerror = () => {
+        setStatus("Event stream disconnected. Reconnecting...", false);
+      };
+    }
+
+    function setControlsEnabled(enabled) {
+      els.frameSlider.disabled = !enabled;
+      els.prevFrame.disabled = !enabled;
+      els.nextFrame.disabled = !enabled;
+      els.playPause.disabled = !enabled;
+    }
+
+    function updateFramePositionLabel(position = 0) {
+      if (!state.frames.length) {
+        els.framePositionValue.textContent = "0 / 0";
+        return;
+      }
+      els.framePositionValue.textContent = `${position + 1} / ${state.frames.length}`;
+    }
+
+    async function loadRuns(selectRunId = null) {
+      state.runs = await requestJson("/api/runs");
+      els.runSelect.innerHTML = "";
+      for (const run of state.runs) {
+        const option = document.createElement("option");
+        option.value = run.run_id;
+        option.textContent = `${run.solver_type} ${run.run_id.slice(0, 8)}`;
+        els.runSelect.append(option);
+      }
+      state.runId = selectRunId || state.runs[0]?.run_id || null;
+      els.runSelect.value = state.runId || "";
+      els.deleteRun.disabled = !state.runId;
+      if (state.runId) {
+        await loadTimeline(state.runId);
+      } else {
+        closeEventSource();
+        state.frames = [];
+        state.psiBounds = null;
+        setControlsEnabled(false);
+        clearCanvas(els.psiCanvas);
+        clearCanvas(els.muCanvas);
+        clearCanvas(els.psiColorbar);
+        clearCanvas(els.muColorbar);
+        clearCanvas(els.ivCanvas);
+        updateColorbarLabels("psi", null);
+        updateColorbarLabels("mu", null);
+        updateFramePositionLabel();
+        setStatus("No runs available. Create a demo run.");
+      }
+    }
+
+    async function loadTimeline(runId) {
+      setControlsEnabled(false);
+      state.timeline = await requestJson(`/api/runs/${runId}/timeline`);
+      state.iv = await requestJson(`/api/runs/${runId}/iv`);
+      state.frames = state.timeline.frames;
+      state.frameBuffer.clear();
+      closeEventSource();
+      if (!state.frames.length) {
+        closeEventSource();
+        setControlsEnabled(false);
+        clearCanvas(els.psiCanvas);
+        clearCanvas(els.muCanvas);
+        clearCanvas(els.psiColorbar);
+        clearCanvas(els.muColorbar);
+        clearCanvas(els.ivCanvas);
+        state.psiBounds = null;
+        updateColorbarLabels("psi", null);
+        updateColorbarLabels("mu", null);
+        updateFramePositionLabel();
+        setStatus("Selected run has no available frames.");
+        return;
+      }
+      state.frameIndex = 0;
+      els.frameSlider.min = "0";
+      els.frameSlider.max = String(state.frames.length - 1);
+      els.frameSlider.value = "0";
+      updateFramePositionLabel(0);
+      state.psiBounds = null;
+      if (state.timeline.stats.mu) {
+        drawColorbar(els.muColorbar, state.timeline.stats.mu, "mu");
+      }
+      setControlsEnabled(true);
+      openEventSource(runId);
+      await loadFrame(0);
+    }
+
+    async function loadFrame(position) {
+      const metadata = state.frames[position];
+      if (!metadata) return;
+      state.frameIndex = position;
+      els.frameSlider.value = String(position);
+      updateFramePositionLabel(position);
+      const frame = state.frameBuffer.get(position) || await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
+      const prevBounds = state.psiBounds;
+      state.psiBounds = adaptivePsiBounds(state.psiBounds, frame.arrays);
+      if (state.psiBounds !== prevBounds) {
+        drawColorbar(els.psiColorbar, state.psiBounds, "psi");
+      }
+      if (!state.timeline.stats.mu) {
+        drawColorbar(els.muColorbar, minMax(frame.arrays.mu), "mu");
+      }
+      drawHeatmap(els.psiCanvas, psiMagnitude(frame.arrays), state.psiBounds);
+      drawHeatmap(els.muCanvas, frame.arrays.mu, state.timeline.stats.mu || minMax(frame.arrays.mu));
+      drawIvPlot(frame.frame_index);
+      els.frameValue.textContent = String(frame.frame_index);
+      els.timeValue.textContent = formatNumber(frame.time_value);
+      els.jeValue.textContent = formatNumber(frame.je);
+      els.voltageValue.textContent = formatNumber(frame.voltage);
+      setStatus(`Loaded frame ${frame.frame_index}.`);
+      fillBuffer(position);
+    }
+
+    function stopPlayback() {
+      state.playing = false;
+      els.playPause.textContent = "Play";
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+    }
+
+    function playbackStepSize() {
+      const value = Number.parseInt(els.playbackStep.value, 10);
+      return Number.isFinite(value) && value > 0 ? value : 1;
+    }
+
+    function nextFramePosition(direction = 1) {
+      if (!state.frames.length) return 0;
+      const raw = direction < 0
+        ? state.frameIndex - playbackStepSize()
+        : state.frameIndex + playbackStepSize();
+      return ((raw % state.frames.length) + state.frames.length) % state.frames.length;
+    }
+
+    function startPlayback() {
+      if (!state.frames.length) return;
+      state.playing = true;
+      els.playPause.textContent = "Pause";
+      const delay = Number(els.playbackSpeed.value) || 250;
+      state.timer = setInterval(() => {
+        const next = nextFramePosition();
+        loadFrame(next).catch((error) => {
+          stopPlayback();
+          setStatus(error.message, true);
+        });
+      }, delay);
+    }
+
+    els.createDemo.addEventListener("click", async () => {
+      try {
+        stopPlayback();
+        setStatus("Creating demo run...");
+        const run = await requestJson("/api/demo-runs", {
+          method: "POST",
+          body: JSON.stringify(demoRequestBody()),
+        });
+        await loadRuns(run.run_id);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+
+    els.refreshRuns.addEventListener("click", () => {
+      stopPlayback();
+      loadRuns(state.runId).catch((error) => setStatus(error.message, true));
+    });
+
+    async function deleteSelectedRun() {
+      if (!state.runId) return;
+      const runId = state.runId;
+      if (!confirm(`Delete run ${runId.slice(0, 8)}?`)) return;
+      try {
+        stopPlayback();
+        setStatus("Deleting run...");
+        await requestJson(`/api/runs/${state.runId}`, {method: "DELETE"});
+        await loadRuns();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    els.deleteRun.addEventListener("click", deleteSelectedRun);
+
+    els.runSelect.addEventListener("change", async () => {
+      try {
+        stopPlayback();
+        state.runId = els.runSelect.value;
+        els.deleteRun.disabled = !state.runId;
+        await loadTimeline(state.runId);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+
+    els.frameSlider.addEventListener("input", () => {
+      stopPlayback();
+      loadFrame(Number(els.frameSlider.value)).catch((error) => setStatus(error.message, true));
+    });
+
+    els.prevFrame.addEventListener("click", () => {
+      stopPlayback();
+      loadFrame(nextFramePosition(-1)).catch((error) => setStatus(error.message, true));
+    });
+
+    els.nextFrame.addEventListener("click", () => {
+      stopPlayback();
+      loadFrame(nextFramePosition()).catch((error) => setStatus(error.message, true));
+    });
+
+    els.playPause.addEventListener("click", () => {
+      if (state.playing) {
+        stopPlayback();
+      } else {
+        startPlayback();
+      }
+    });
+
+    window.addEventListener("beforeunload", closeEventSource);
+
+    setControlsEnabled(false);
+    loadRuns().catch((error) => setStatus(error.message, true));
+  </script>
+</body>
+</html>

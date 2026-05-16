@@ -1,0 +1,158 @@
+import pytest
+from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
+
+from tdgl_data.models import Frame, IVPoint, Run, RunEvent
+from tdgl_data.repository import (
+    append_frame_record,
+    complete_run,
+    create_event,
+    create_run,
+    fail_run,
+    get_frame,
+    get_iv_points,
+    get_run,
+    get_timeline,
+)
+
+
+def _make_arrays(rows=4, cols=3):
+    return {
+        "psi_real": [[0.0] * cols for _ in range(rows)],
+        "psi_imag": [[0.0] * cols for _ in range(rows)],
+        "mu": [[0.0] * cols for _ in range(rows)],
+    }
+
+
+def test_create_run_defaults(session):
+    run = create_run(session, solver_type="synthetic", grid_shape=(8, 6))
+    session.commit()
+
+    loaded = get_run(session, run.run_id)
+    assert loaded is not None
+    assert loaded.status == "created"
+    assert loaded.solver_type == "synthetic"
+    assert loaded.mesh_metadata["grid_shape"] == [8, 6]
+
+
+def test_append_frame_record_creates_timeline_and_iv_point(session):
+    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
+    arrays = _make_arrays()
+    append_frame_record(
+        session,
+        run_id=run.run_id,
+        frame_index=0,
+        time_value=0.25,
+        je=1.5,
+        voltage=0.01,
+        psi_real=arrays["psi_real"],
+        psi_imag=arrays["psi_imag"],
+        mu=arrays["mu"],
+    )
+    session.commit()
+
+    frame = get_frame(session, run.run_id, 0)
+    timeline = get_timeline(session, run.run_id)
+    iv_points = get_iv_points(session, run.run_id)
+
+    assert frame is not None
+    assert frame.status == "available"
+    assert len(timeline) == 1
+    assert timeline[0].frame_index == 0
+    assert iv_points[0].voltage == pytest.approx(0.01)
+
+
+def test_duplicate_frame_record_raises_integrity_error(session):
+    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
+    arrays = _make_arrays()
+    append_frame_record(
+        session,
+        run_id=run.run_id,
+        frame_index=0,
+        time_value=0.0,
+        je=0.0,
+        voltage=0.0,
+        psi_real=arrays["psi_real"],
+        psi_imag=arrays["psi_imag"],
+        mu=arrays["mu"],
+    )
+    session.commit()
+
+    with pytest.raises(IntegrityError):
+        append_frame_record(
+            session,
+            run_id=run.run_id,
+            frame_index=0,
+            time_value=0.1,
+            je=0.1,
+            voltage=0.1,
+            psi_real=arrays["psi_real"],
+            psi_imag=arrays["psi_imag"],
+            mu=arrays["mu"],
+        )
+
+
+def test_append_frame_record_missing_run_raises_integrity_error(session):
+    arrays = _make_arrays(1, 1)
+    with pytest.raises(IntegrityError):
+        append_frame_record(
+            session,
+            run_id="missing",
+            frame_index=0,
+            time_value=0.0,
+            je=0.0,
+            voltage=0.0,
+            psi_real=arrays["psi_real"],
+            psi_imag=arrays["psi_imag"],
+            mu=arrays["mu"],
+        )
+
+
+def test_deleting_run_cascades_metadata_rows(session):
+    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
+    arrays = _make_arrays()
+    append_frame_record(
+        session,
+        run_id=run.run_id,
+        frame_index=0,
+        time_value=0.25,
+        je=1.5,
+        voltage=0.01,
+        psi_real=arrays["psi_real"],
+        psi_imag=arrays["psi_imag"],
+        mu=arrays["mu"],
+    )
+    create_event(session, run.run_id, "frame_available", {"frame_index": 0})
+    session.commit()
+
+    session.execute(delete(Run).where(Run.run_id == run.run_id))
+    session.commit()
+
+    assert session.query(Run).count() == 0
+    assert session.query(Frame).count() == 0
+    assert session.query(IVPoint).count() == 0
+    assert session.query(RunEvent).count() == 0
+
+
+def test_complete_and_fail_run_status(session):
+    completed = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
+    failed = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
+
+    complete_run(session, completed.run_id)
+    fail_run(session, failed.run_id, "solver crashed")
+    session.commit()
+
+    assert get_run(session, completed.run_id).status == "completed"
+    failed_run = get_run(session, failed.run_id)
+    assert failed_run.status == "failed"
+    assert failed_run.metadata_["failure_message"] == "solver crashed"
+
+
+def test_create_event_records_ordered_payload(session):
+    run = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
+    event = create_event(session, run.run_id, "frame_available", {"frame_index": 7})
+    session.commit()
+
+    assert event.event_id == 1
+    assert event.event_type == "frame_available"
+    assert event.payload["frame_index"] == 7
