@@ -28,6 +28,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["tdgl_data*", "tdgl_generator*"]
 
 [tool.setuptools.package-data]

@@ -35,8 +35,8 @@ jobs:
           echo "$CHANGES"
           VIEWER=false
           GENERATOR=false
-          echo "$CHANGES" | grep -qE "^(tdgl_data/|services/data-viewer/)" && VIEWER=true
-          echo "$CHANGES" | grep -qE "^(tdgl_data/synthetic\.py|tdgl_generator/|services/generator/)" && GENERATOR=true
+          echo "$CHANGES" | grep -qE "^(src/tdgl_data/|services/data-viewer/)" && VIEWER=true
+          echo "$CHANGES" | grep -qE "^(src/tdgl_data/synthetic\.py|src/tdgl_generator/|services/generator/)" && GENERATOR=true
           echo "build_viewer=$VIEWER" >> "$GITHUB_OUTPUT"
           echo "build_generator=$GENERATOR" >> "$GITHUB_OUTPUT"
           echo "Viewer changed: $VIEWER"
