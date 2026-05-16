@@ -1,0 +1,71 @@
+name: Build and Push Images
+
+on:
+  push:
+    branches: [main, feature/*]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # Fallback: if before is all zeros (new branch), diff against HEAD~1
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE="HEAD~1"
+          fi
+          CHANGES=$(git diff --name-only "$BASE" HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD)
+          echo "$CHANGES"
+          VIEWER=false
+          GENERATOR=false
+          echo "$CHANGES" | grep -q "^tdgl_data/" && VIEWER=true
+          echo "$CHANGES" | grep -q "^tdgl_data/synthetic.py" && GENERATOR=true
+          echo "$CHANGES" | grep -q "^tdgl_generator/" && GENERATOR=true
+          echo "build_viewer=$VIEWER" >> "$GITHUB_OUTPUT"
+          echo "build_generator=$GENERATOR" >> "$GITHUB_OUTPUT"
+          echo "Viewer changed: $VIEWER"
+          echo "Generator changed: $GENERATOR"
+
+      - name: Log in to GHCR
+        if: steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push data-viewer
+        if: steps.changes.outputs.build_viewer == 'true'
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          docker build -f Dockerfile.data-viewer \
+            -t ghcr.io/fangrh/tdgl-data-viewer:latest \
+            -t ghcr.io/fangrh/tdgl-data-viewer:$SHA \
+            .
+          docker push ghcr.io/fangrh/tdgl-data-viewer --all-tags
+
+      - name: Build and push generator
+        if: steps.changes.outputs.build_generator == 'true'
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          docker build -f Dockerfile.generator \
+            -t ghcr.io/fangrh/tdgl-generator:latest \
+            -t ghcr.io/fangrh/tdgl-generator:$SHA \
+            .
+          docker push ghcr.io/fangrh/tdgl-generator --all-tags
