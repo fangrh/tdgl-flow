@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: data-viewer
-          image: ghcr.io/fangrh/tdgl-flow:latest
+          image: ghcr.io/fangrh/tdgl-data-viewer:latest
           ports:
             - containerPort: 8000
           envFrom:

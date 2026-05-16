@@ -15,7 +15,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: generator
-          image: ghcr.io/fangrh/tdgl-flow:latest
+          image: ghcr.io/fangrh/tdgl-generator:latest
           command:
             - python
             - -m
