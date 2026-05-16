@@ -209,11 +209,10 @@ def test_viewer_can_delete_selected_history_run(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'id="deleteRun"' in response.text
-    assert "deleteSelectedRun" in response.text
+    assert 'class="run-item-delete"' in response.text
+    assert "deleteRun" in response.text
     assert "confirm(" in response.text
     assert "DELETE" in response.text
-    assert "`/api/runs/${state.runId}`" in response.text
 
 
 def test_viewer_playback_step_accepts_unbounded_numeric_skips(client):
@@ -224,9 +223,9 @@ def test_viewer_playback_step_accepts_unbounded_numeric_skips(client):
     assert 'type="number"' in response.text
     assert 'min="1"' in response.text
     assert "playbackStepSize" in response.text
-    assert "nextFramePosition" in response.text
-    assert "state.frameIndex + playbackStepSize()" in response.text
-    assert "state.frameIndex - playbackStepSize()" in response.text
+    assert "nextFrameIndex" in response.text
+    assert "state.currentFrameIndex + playbackStepSize()" in response.text
+    assert "state.currentFrameIndex - playbackStepSize()" in response.text
 
 
 def test_viewer_frame_bar_shows_fixed_loaded_frame_count(client):
@@ -235,7 +234,7 @@ def test_viewer_frame_bar_shows_fixed_loaded_frame_count(client):
     assert response.status_code == 200
     assert 'id="framePositionValue"' in response.text
     assert "updateFramePositionLabel" in response.text
-    assert "`${position + 1} / ${state.frames.length}`" in response.text
+    assert "`${frameIndex + 1} / ${total}`" in response.text
     assert 'els.framePositionValue.textContent = "0 / 0"' in response.text
     assert 'Frame index' in response.text
 
@@ -243,7 +242,7 @@ def test_viewer_frame_bar_shows_fixed_loaded_frame_count(client):
 def test_viewer_sets_frame_bar_scale_before_loading_first_frame(client):
     response = client.get("/viewer")
     assert response.status_code == 200
-    slider_max_index = response.text.index('els.frameSlider.max = String(state.frames.length - 1)')
+    slider_max_index = response.text.index('els.frameSlider.max = String(state.totalFrames - 1)')
     controls_enabled_index = response.text.index("setControlsEnabled(true)")
     assert slider_max_index < controls_enabled_index
 

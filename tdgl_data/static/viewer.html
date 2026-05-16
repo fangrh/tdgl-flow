@@ -15,7 +15,25 @@
     main { max-width: 1480px; margin: 0 auto; padding: 24px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
     h1 { margin: 0; font-size: 24px; font-weight: 650; }
-    .toolbar, .timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    .run-list-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .run-list-header h2 { margin: 0; font-size: 15px; font-weight: 650; }
+    .run-list { max-height: 210px; overflow-y: auto; border: 1px solid #c8d0d9; border-radius: 6px; background: #ffffff; margin-bottom: 14px; }
+    .run-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #eaedf1; }
+    .run-item:last-child { border-bottom: none; }
+    .run-item:hover { background: #f0f4f8; }
+    .run-item.selected { background: #e0f2f1; border-left: 3px solid #0f766e; padding-left: 9px; }
+    .run-item-info { flex: 1; min-width: 0; }
+    .run-item-id { font-size: 13px; font-weight: 600; color: #1f2933; }
+    .run-item-meta { font-size: 12px; color: #667381; margin-top: 2px; }
+    .run-item-delete { background: none; border: none; color: #9aa5b4; font-size: 18px; padding: 0 4px; min-height: auto; cursor: pointer; line-height: 1; border-radius: 4px; }
+    .run-item-delete:hover { color: #d92d20; background: #fef2f2; }
+    .sync-btn { min-height: 36px; border: 1px solid #c8d0d9; border-radius: 6px; background: #ffffff; color: #1f2933; font: inherit; padding: 0 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+    .sync-btn:hover { background: #f0f4f8; }
+    .sync-btn.spinning .sync-icon { animation: spin 0.8s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .sync-icon { display: inline-block; font-size: 16px; }
+    .timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
     button, select, input[type="number"] {
       min-height: 36px;
       border: 1px solid #c8d0d9;
@@ -68,11 +86,13 @@
     <header>
       <h1>TDGL Heatmap Viewer</h1>
           </header>
-    <section class="toolbar" aria-label="Run controls">
-      <select id="runSelect" aria-label="Run"></select>
-      <button id="refreshRuns">Refresh</button>
-      <button id="deleteRun" disabled>Delete</button>
-    </section>
+    <div class="run-list-header">
+      <h2>Datasets</h2>
+      <button class="sync-btn" id="syncRuns" title="Refresh run list">
+        <span class="sync-icon">&#x21bb;</span> Sync
+      </button>
+    </div>
+    <div class="run-list" id="runList"></div>
     <section class="timeline" aria-label="Frame controls">
       <button id="prevFrame" title="Previous frame">Prev</button>
       <button id="playPause" title="Play or pause">Play</button>
@@ -134,10 +154,13 @@
     const state = {
       runs: [],
       runId: null,
+      run: null,
       timeline: null,
       iv: [],
       frames: [],
-      frameIndex: 0,
+      totalFrames: 0,
+      currentFrameIndex: 0,
+      waitingForFrame: null,
       psiBounds: null,
       playing: false,
       timer: null,
@@ -145,9 +168,8 @@
       eventSource: null,
     };
     const els = {
-      refreshRuns: document.getElementById("refreshRuns"),
-      deleteRun: document.getElementById("deleteRun"),
-      runSelect: document.getElementById("runSelect"),
+      runList: document.getElementById("runList"),
+      syncRuns: document.getElementById("syncRuns"),
       frameSlider: document.getElementById("frameSlider"),
       playbackStep: document.getElementById("playbackStep"),
       playbackSpeed: document.getElementById("playbackSpeed"),
@@ -544,22 +566,23 @@
       return (expanded.min === current.min && expanded.max === current.max) ? current : expanded;
     }
 
-    async function fillBuffer(centerPosition) {
-      const total = state.frames.length;
-      const low = Math.max(0, centerPosition - BUFFER_RADIUS);
-      const high = Math.min(total - 1, centerPosition + BUFFER_RADIUS);
-      for (let pos = low; pos <= high; pos += 1) {
-        if (state.frameBuffer.has(pos)) continue;
-        const metadata = state.frames[pos];
+    async function fillBuffer(centerFrameIndex) {
+      const total = state.totalFrames;
+      const low = Math.max(0, centerFrameIndex - BUFFER_RADIUS);
+      const high = Math.min(total - 1, centerFrameIndex + BUFFER_RADIUS);
+      for (let fi = low; fi <= high; fi += 1) {
+        if (state.frameBuffer.has(fi)) continue;
+        const metadata = state.frames.find(f => f.frame_index === fi);
+        if (!metadata) continue;
         try {
           const frame = await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
-          state.frameBuffer.set(pos, frame);
+          state.frameBuffer.set(fi, frame);
         } catch (_error) {
           // skip failed prefetch
         }
       }
       for (const key of state.frameBuffer.keys()) {
-        if (key < centerPosition - BUFFER_RADIUS * 2 || key > centerPosition + BUFFER_RADIUS * 2) {
+        if (key < centerFrameIndex - BUFFER_RADIUS * 2 || key > centerFrameIndex + BUFFER_RADIUS * 2) {
           state.frameBuffer.delete(key);
         }
       }
@@ -586,10 +609,21 @@
           voltage: data.voltage,
           status: "available",
         });
-        els.frameSlider.max = String(state.frames.length - 1);
-        updateFramePositionLabel(state.frameIndex);
-        if (els.autoFollow.checked) {
-          loadFrame(state.frames.length - 1);
+        state.frames.sort((a, b) => a.frame_index - b.frame_index);
+        state.iv.push({
+          frame_index: data.frame_index,
+          time_value: data.time_value,
+          je: data.je,
+          voltage: data.voltage,
+        });
+        updateFramePositionLabel(state.currentFrameIndex);
+        if (state.waitingForFrame === data.frame_index) {
+          state.waitingForFrame = null;
+          loadFrame(data.frame_index);
+        } else if (els.autoFollow.checked) {
+          loadFrame(data.frame_index);
+        } else {
+          drawIvPlot(state.currentFrameIndex);
         }
         setStatus(`Frame ${data.frame_index} arrived (${data.frame_count} total).`);
       });
@@ -605,26 +639,73 @@
       els.playPause.disabled = !enabled;
     }
 
-    function updateFramePositionLabel(position = 0) {
-      if (!state.frames.length) {
+    function updateFramePositionLabel(frameIndex = 0) {
+      const total = state.totalFrames || state.frames.length;
+      if (!total) {
         els.framePositionValue.textContent = "0 / 0";
         return;
       }
-      els.framePositionValue.textContent = `${position + 1} / ${state.frames.length}`;
+      els.framePositionValue.textContent = `${frameIndex + 1} / ${total}`;
+    }
+
+    function formatRunDate(run) {
+      const created = run.created_at || run.metadata?.created_at;
+      if (!created) return "unknown";
+      const d = new Date(created + (created.endsWith("Z") ? "" : "Z"));
+      if (isNaN(d.getTime())) return created.slice(0, 19);
+      return d.toLocaleString();
+    }
+
+    function renderRunList() {
+      els.runList.innerHTML = "";
+      for (const run of state.runs) {
+        const item = document.createElement("div");
+        item.className = "run-item" + (run.run_id === state.runId ? " selected" : "");
+        item.innerHTML = `
+          <div class="run-item-info">
+            <div class="run-item-id">${run.solver_type} ${run.run_id.slice(0, 8)}</div>
+            <div class="run-item-meta">${formatRunDate(run)} &middot; ${run.status} &middot; ${run.mesh_metadata?.grid_shape?.join("x") || "?"}</div>
+          </div>
+          <button class="run-item-delete" data-run-id="${run.run_id}" title="Delete run">&times;</button>
+        `;
+        item.addEventListener("click", (e) => {
+          if (e.target.closest(".run-item-delete")) return;
+          if (run.run_id !== state.runId) {
+            stopPlayback();
+            state.runId = run.run_id;
+            renderRunList();
+            loadTimeline(state.runId).catch((error) => setStatus(error.message, true));
+          }
+        });
+        const deleteBtn = item.querySelector(".run-item-delete");
+        deleteBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          deleteRun(run.run_id);
+        });
+        els.runList.append(item);
+      }
+    }
+
+    async function deleteRun(runId) {
+      if (!confirm(`Delete run ${runId.slice(0, 8)}?`)) return;
+      try {
+        stopPlayback();
+        setStatus("Deleting run...");
+        await requestJson(`/api/runs/${runId}`, {method: "DELETE"});
+        await loadRuns(state.runId === runId ? null : state.runId);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
     }
 
     async function loadRuns(selectRunId = null) {
       state.runs = await requestJson("/api/runs");
-      els.runSelect.innerHTML = "";
-      for (const run of state.runs) {
-        const option = document.createElement("option");
-        option.value = run.run_id;
-        option.textContent = `${run.solver_type} ${run.run_id.slice(0, 8)}`;
-        els.runSelect.append(option);
+      state.runId = selectRunId || state.runId || state.runs[0]?.run_id || null;
+      if (state.runId && !state.runs.some(r => r.run_id === state.runId)) {
+        state.runId = state.runs[0]?.run_id || null;
       }
-      state.runId = selectRunId || state.runs[0]?.run_id || null;
-      els.runSelect.value = state.runId || "";
-      els.deleteRun.disabled = !state.runId;
+      state.run = state.runs.find(r => r.run_id === state.runId) || null;
+      renderRunList();
       if (state.runId) {
         await loadTimeline(state.runId);
       } else {
@@ -640,7 +721,7 @@
         updateColorbarLabels("psi", null);
         updateColorbarLabels("mu", null);
         updateFramePositionLabel();
-        setStatus("No runs available. Create a demo run.");
+        setStatus("No runs available.");
       }
     }
 
@@ -649,9 +730,11 @@
       state.timeline = await requestJson(`/api/runs/${runId}/timeline`);
       state.iv = await requestJson(`/api/runs/${runId}/iv`);
       state.frames = state.timeline.frames;
+      state.totalFrames = state.run?.total_frames || state.frames.length;
+      state.waitingForFrame = null;
       state.frameBuffer.clear();
       closeEventSource();
-      if (!state.frames.length) {
+      if (!state.totalFrames) {
         closeEventSource();
         setControlsEnabled(false);
         clearCanvas(els.psiCanvas);
@@ -666,9 +749,9 @@
         setStatus("Selected run has no available frames.");
         return;
       }
-      state.frameIndex = 0;
+      state.currentFrameIndex = 0;
       els.frameSlider.min = "0";
-      els.frameSlider.max = String(state.frames.length - 1);
+      els.frameSlider.max = String(state.totalFrames - 1);
       els.frameSlider.value = "0";
       updateFramePositionLabel(0);
       state.psiBounds = null;
@@ -677,16 +760,34 @@
       }
       setControlsEnabled(true);
       openEventSource(runId);
-      await loadFrame(0);
+      if (state.frames.length) {
+        await loadFrame(0);
+      } else {
+        setStatus("Waiting for frames to arrive...");
+      }
     }
 
-    async function loadFrame(position) {
-      const metadata = state.frames[position];
-      if (!metadata) return;
-      state.frameIndex = position;
-      els.frameSlider.value = String(position);
-      updateFramePositionLabel(position);
-      const frame = state.frameBuffer.get(position) || await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
+    async function loadFrame(targetFrameIndex) {
+      const metadata = state.frames.find(f => f.frame_index === targetFrameIndex);
+      if (!metadata) {
+        state.waitingForFrame = targetFrameIndex;
+        state.currentFrameIndex = targetFrameIndex;
+        els.frameSlider.value = String(targetFrameIndex);
+        updateFramePositionLabel(targetFrameIndex);
+        els.frameValue.textContent = "-";
+        els.timeValue.textContent = "-";
+        els.jeValue.textContent = "-";
+        els.voltageValue.textContent = "-";
+        stopPlayback();
+        setStatus(`Waiting for frame ${targetFrameIndex}...`);
+        return;
+      }
+      state.waitingForFrame = null;
+      state.currentFrameIndex = targetFrameIndex;
+      els.frameSlider.value = String(targetFrameIndex);
+      updateFramePositionLabel(targetFrameIndex);
+      const frame = state.frameBuffer.get(targetFrameIndex) || await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
+      state.frameBuffer.set(targetFrameIndex, frame);
       const prevBounds = state.psiBounds;
       state.psiBounds = adaptivePsiBounds(state.psiBounds, frame.arrays);
       if (state.psiBounds !== prevBounds) {
@@ -703,7 +804,7 @@
       els.jeValue.textContent = formatNumber(frame.je);
       els.voltageValue.textContent = formatNumber(frame.voltage);
       setStatus(`Loaded frame ${frame.frame_index}.`);
-      fillBuffer(position);
+      fillBuffer(targetFrameIndex);
     }
 
     function stopPlayback() {
@@ -720,21 +821,23 @@
       return Number.isFinite(value) && value > 0 ? value : 1;
     }
 
-    function nextFramePosition(direction = 1) {
-      if (!state.frames.length) return 0;
+    function nextFrameIndex(direction = 1) {
+      const total = state.totalFrames || state.frames.length;
+      if (!total) return 0;
       const raw = direction < 0
-        ? state.frameIndex - playbackStepSize()
-        : state.frameIndex + playbackStepSize();
-      return ((raw % state.frames.length) + state.frames.length) % state.frames.length;
+        ? state.currentFrameIndex - playbackStepSize()
+        : state.currentFrameIndex + playbackStepSize();
+      return ((raw % total) + total) % total;
     }
 
     function startPlayback() {
-      if (!state.frames.length) return;
+      const total = state.totalFrames || state.frames.length;
+      if (!total) return;
       state.playing = true;
       els.playPause.textContent = "Pause";
       const delay = Number(els.playbackSpeed.value) || 250;
       state.timer = setInterval(() => {
-        const next = nextFramePosition();
+        const next = nextFrameIndex();
         loadFrame(next).catch((error) => {
           stopPlayback();
           setStatus(error.message, true);
@@ -742,37 +845,15 @@
       }, delay);
     }
 
-    
-    els.refreshRuns.addEventListener("click", () => {
-      stopPlayback();
-      loadRuns(state.runId).catch((error) => setStatus(error.message, true));
-    });
 
-    async function deleteSelectedRun() {
-      if (!state.runId) return;
-      const runId = state.runId;
-      if (!confirm(`Delete run ${runId.slice(0, 8)}?`)) return;
-      try {
-        stopPlayback();
-        setStatus("Deleting run...");
-        await requestJson(`/api/runs/${state.runId}`, {method: "DELETE"});
-        await loadRuns();
-      } catch (error) {
+    els.syncRuns.addEventListener("click", () => {
+      els.syncRuns.classList.add("spinning");
+      loadRuns(state.runId).then(() => {
+        setTimeout(() => els.syncRuns.classList.remove("spinning"), 400);
+      }).catch((error) => {
+        els.syncRuns.classList.remove("spinning");
         setStatus(error.message, true);
-      }
-    }
-
-    els.deleteRun.addEventListener("click", deleteSelectedRun);
-
-    els.runSelect.addEventListener("change", async () => {
-      try {
-        stopPlayback();
-        state.runId = els.runSelect.value;
-        els.deleteRun.disabled = !state.runId;
-        await loadTimeline(state.runId);
-      } catch (error) {
-        setStatus(error.message, true);
-      }
+      });
     });
 
     els.frameSlider.addEventListener("input", () => {
@@ -782,12 +863,12 @@
 
     els.prevFrame.addEventListener("click", () => {
       stopPlayback();
-      loadFrame(nextFramePosition(-1)).catch((error) => setStatus(error.message, true));
+      loadFrame(nextFrameIndex(-1)).catch((error) => setStatus(error.message, true));
     });
 
     els.nextFrame.addEventListener("click", () => {
       stopPlayback();
-      loadFrame(nextFramePosition()).catch((error) => setStatus(error.message, true));
+      loadFrame(nextFrameIndex()).catch((error) => setStatus(error.message, true));
     });
 
     els.playPause.addEventListener("click", () => {
@@ -799,6 +880,12 @@
     });
 
     window.addEventListener("beforeunload", closeEventSource);
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        loadRuns(state.runId).catch(() => {});
+      }
+    });
 
     setControlsEnabled(false);
     loadRuns().catch((error) => setStatus(error.message, true));
