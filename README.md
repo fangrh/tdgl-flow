@@ -5,13 +5,11 @@ with a browser-based heatmap viewer.
 
 ## TDGL Data Service
 
-FastAPI application that manages simulation metadata in PostgreSQL and frame
-array data in Zarr. Includes a built-in heatmap viewer.
+FastAPI application that manages simulation data in PostgreSQL. Includes a built-in heatmap viewer.
 
 - REST API for run and frame CRUD
 - PostgreSQL-compatible metadata schema with SQLAlchemy ORM
-- Filesystem-backed Zarr frame arrays (psi_real, psi_imag, mu)
-- Browser heatmap viewer with adaptive colorbars and frame buffering
+- Browser heatmap viewer with Plotly rendering and frame buffering
 - Server-Sent Events for real-time frame availability notifications
 - Synthetic data generation for testing and UI prototyping
 - K8s manifests for PostgreSQL StatefulSet + data service Deployment
@@ -51,32 +49,35 @@ synthetic frames and inspect |psi| and mu heatmaps.
 ## Kubernetes Deployment
 
 ```bash
-# Build and load image
-docker build -t kubeflow-tdgl-data:latest .
-kind load docker-image kubeflow-tdgl-data:latest  # or minikube
+# Build images
+docker build -f services/data-viewer/Dockerfile -t ghcr.io/fangrh/tdgl-data-viewer:latest .
+docker build -f services/generator/Dockerfile -t ghcr.io/fangrh/tdgl-generator:latest .
 
-# Deploy
-kubectl apply -f k8s/
+# Deploy infrastructure
+kubectl apply -f infra/namespace.yaml
+kubectl apply -f infra/postgresql/k8s/
+
+# Deploy services
+kubectl apply -f services/data-viewer/k8s/
 
 # Port-forward to access viewer
-kubectl port-forward -n tdgl svc/data-service 8000:80
+kubectl port-forward -n tdgl svc/data-viewer 8000:80
 ```
 
 ## Project Structure
 
 ```
-tdgl_data/
-  app.py            FastAPI application factory
-  config.py         Pydantic settings (env vars)
-  db.py             SQLAlchemy engine + session factory
-  dev_app.py        Dev entrypoint (auto-creates schema)
-  events.py         SSE event bus
-  models.py         SQLAlchemy ORM models
-  repository.py     Database query functions
-  schemas.py        Pydantic request/response schemas
-  static/viewer.html  Browser heatmap viewer
-  synthetic.py      Synthetic TDGL data generator
-  zarr_store.py     Zarr array storage backend
-k8s/                Kubernetes manifests
-tests/              pytest test suite
+tdgl_data/                Shared library (models, schemas, API, synthetic)
+tdgl_generator/           Generator package (CLI + web app)
+services/
+  data-viewer/            Data service + viewer
+    Dockerfile
+    k8s/                  deployment, service, secret
+  generator/              Test data generator
+    Dockerfile
+    k8s/                  job manifest
+infra/
+  namespace.yaml
+  postgresql/k8s/         statefulset, pvc, service, secret
+tests/                    pytest test suite
 ```

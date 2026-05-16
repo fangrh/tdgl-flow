@@ -1,7 +1,12 @@
 data/
-docs/
 tests/
 __pycache__/
 *.pyc
 .git/
 .claude/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+infra/
+docs/
+services/*/k8s/
