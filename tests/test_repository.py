@@ -16,13 +16,16 @@ from tdgl_data.repository import (
 )
 
 
+def _make_arrays(rows=4, cols=3):
+    return {
+        "psi_real": [[0.0] * cols for _ in range(rows)],
+        "psi_imag": [[0.0] * cols for _ in range(rows)],
+        "mu": [[0.0] * cols for _ in range(rows)],
+    }
+
+
 def test_create_run_defaults(session):
-    run = create_run(
-        session,
-        solver_type="synthetic",
-        grid_shape=(8, 6),
-        zarr_root="runs/example/frames.zarr",
-    )
+    run = create_run(session, solver_type="synthetic", grid_shape=(8, 6))
     session.commit()
 
     loaded = get_run(session, run.run_id)
@@ -33,7 +36,8 @@ def test_create_run_defaults(session):
 
 
 def test_append_frame_record_creates_timeline_and_iv_point(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3), zarr_root="runs/r/frames.zarr")
+    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
+    arrays = _make_arrays()
     append_frame_record(
         session,
         run_id=run.run_id,
@@ -41,8 +45,9 @@ def test_append_frame_record_creates_timeline_and_iv_point(session):
         time_value=0.25,
         je=1.5,
         voltage=0.01,
-        zarr_group="runs/r/frames.zarr",
-        checksum="abc",
+        psi_real=arrays["psi_real"],
+        psi_imag=arrays["psi_imag"],
+        mu=arrays["mu"],
     )
     session.commit()
 
@@ -58,9 +63,8 @@ def test_append_frame_record_creates_timeline_and_iv_point(session):
 
 
 def test_duplicate_frame_record_raises_integrity_error(session):
-    run = create_run(
-        session, solver_type="synthetic", grid_shape=(4, 3), zarr_root="runs/r/frames.zarr"
-    )
+    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
+    arrays = _make_arrays()
     append_frame_record(
         session,
         run_id=run.run_id,
@@ -68,7 +72,9 @@ def test_duplicate_frame_record_raises_integrity_error(session):
         time_value=0.0,
         je=0.0,
         voltage=0.0,
-        zarr_group="g",
+        psi_real=arrays["psi_real"],
+        psi_imag=arrays["psi_imag"],
+        mu=arrays["mu"],
     )
     session.commit()
 
@@ -80,11 +86,14 @@ def test_duplicate_frame_record_raises_integrity_error(session):
             time_value=0.1,
             je=0.1,
             voltage=0.1,
-            zarr_group="g",
+            psi_real=arrays["psi_real"],
+            psi_imag=arrays["psi_imag"],
+            mu=arrays["mu"],
         )
 
 
 def test_append_frame_record_missing_run_raises_integrity_error(session):
+    arrays = _make_arrays(1, 1)
     with pytest.raises(IntegrityError):
         append_frame_record(
             session,
@@ -93,14 +102,15 @@ def test_append_frame_record_missing_run_raises_integrity_error(session):
             time_value=0.0,
             je=0.0,
             voltage=0.0,
-            zarr_group="g",
+            psi_real=arrays["psi_real"],
+            psi_imag=arrays["psi_imag"],
+            mu=arrays["mu"],
         )
 
 
 def test_deleting_run_cascades_metadata_rows(session):
-    run = create_run(
-        session, solver_type="synthetic", grid_shape=(4, 3), zarr_root="runs/r/frames.zarr"
-    )
+    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
+    arrays = _make_arrays()
     append_frame_record(
         session,
         run_id=run.run_id,
@@ -108,7 +118,9 @@ def test_deleting_run_cascades_metadata_rows(session):
         time_value=0.25,
         je=1.5,
         voltage=0.01,
-        zarr_group="runs/r/frames.zarr",
+        psi_real=arrays["psi_real"],
+        psi_imag=arrays["psi_imag"],
+        mu=arrays["mu"],
     )
     create_event(session, run.run_id, "frame_available", {"frame_index": 0})
     session.commit()
@@ -123,8 +135,8 @@ def test_deleting_run_cascades_metadata_rows(session):
 
 
 def test_complete_and_fail_run_status(session):
-    completed = create_run(session, solver_type="synthetic", grid_shape=(2, 2), zarr_root="runs/c/frames.zarr")
-    failed = create_run(session, solver_type="synthetic", grid_shape=(2, 2), zarr_root="runs/f/frames.zarr")
+    completed = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
+    failed = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
 
     complete_run(session, completed.run_id)
     fail_run(session, failed.run_id, "solver crashed")
@@ -137,7 +149,7 @@ def test_complete_and_fail_run_status(session):
 
 
 def test_create_event_records_ordered_payload(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(2, 2), zarr_root="runs/r/frames.zarr")
+    run = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
     event = create_event(session, run.run_id, "frame_available", {"frame_index": 7})
     session.commit()
 

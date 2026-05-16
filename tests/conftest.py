@@ -19,10 +19,9 @@ def session() -> Iterator[Session]:
 
 
 @pytest.fixture
-def client(tmp_path) -> Iterator[TestClient]:
+def client() -> Iterator[TestClient]:
     app = create_app(
         database_url="sqlite+pysqlite:///:memory:",
-        zarr_root=tmp_path / "zarr",
         create_schema=True,
     )
     with TestClient(app) as test_client:

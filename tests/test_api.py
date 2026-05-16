@@ -23,31 +23,19 @@ def test_missing_run_returns_404(client):
     assert response.json()["detail"] == "Run not found"
 
 
-def test_delete_run_removes_database_record_and_zarr_store(tmp_path):
-    zarr_root = tmp_path / "zarr"
-    app = create_app(
-        database_url="sqlite+pysqlite:///:memory:",
-        zarr_root=zarr_root,
-        create_schema=True,
+def test_delete_run_removes_database_record(client):
+    created = client.post(
+        "/api/demo-runs",
+        json={"frame_count": 2, "grid_shape": [3, 4], "seed": 5},
     )
+    assert created.status_code == 201
+    run_id = created.json()["run_id"]
 
-    with TestClient(app) as client:
-        created = client.post(
-            "/api/demo-runs",
-            json={"frame_count": 2, "grid_shape": [3, 4], "seed": 5},
-        )
-        assert created.status_code == 201
-        body = created.json()
-        run_id = body["run_id"]
-        store_path = zarr_root / body["zarr_root"]
-        assert store_path.exists()
+    deleted = client.delete(f"/api/runs/{run_id}")
 
-        deleted = client.delete(f"/api/runs/{run_id}")
-
-        assert deleted.status_code == 204
-        assert client.get(f"/api/runs/{run_id}").status_code == 404
-        assert client.get(f"/api/runs/{run_id}/timeline").status_code == 404
-        assert not store_path.exists()
+    assert deleted.status_code == 204
+    assert client.get(f"/api/runs/{run_id}").status_code == 404
+    assert client.get(f"/api/runs/{run_id}/timeline").status_code == 404
 
 
 def test_delete_missing_run_returns_404(client):
@@ -68,7 +56,7 @@ def test_list_runs_returns_created_runs(client):
     assert {first.json()["run_id"], second.json()["run_id"]} <= run_ids
 
 
-def test_create_run_response_includes_metadata_and_logical_zarr_uri(client):
+def test_create_run_response_includes_metadata(client):
     payload = {
         "solver_type": "synthetic",
         "grid_shape": [4, 3],
@@ -82,31 +70,10 @@ def test_create_run_response_includes_metadata_and_logical_zarr_uri(client):
     assert response.status_code == 201
     body = response.json()
     assert body["mesh_metadata"]["grid_shape"] == [4, 3]
-    assert body["zarr_root"] == f"runs/{body['run_id']}/frames.zarr"
+    assert "zarr_root" not in body
     assert body["device_params"] == {"length": 12}
     assert body["timing_params"] == {"dt": 0.25}
     assert body["metadata"] == {"label": "smoke"}
-
-
-def test_create_run_creates_zarr_store_under_configured_root(tmp_path):
-    zarr_root = tmp_path / "zarr"
-    app = create_app(
-        database_url="sqlite+pysqlite:///:memory:",
-        zarr_root=zarr_root,
-        create_schema=True,
-    )
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/runs",
-            json={"solver_type": "synthetic", "grid_shape": [4, 3]},
-        )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert (zarr_root / body["zarr_root"] / "psi_real").exists()
-    assert (zarr_root / body["zarr_root"] / "psi_imag").exists()
-    assert (zarr_root / body["zarr_root"] / "mu").exists()
 
 
 @pytest.mark.parametrize(
@@ -122,11 +89,9 @@ def test_create_run_rejects_invalid_grid_shape_dimensions(client, grid_shape):
     assert response.status_code == 422
 
 
-def test_create_schema_false_preserves_missing_schema_boundary(tmp_path):
-    database_path = tmp_path / "runs.db"
+def test_create_schema_false_preserves_missing_schema_boundary():
     app = create_app(
-        database_url=f"sqlite+pysqlite:///{database_path}",
-        zarr_root=tmp_path / "zarr",
+        database_url="sqlite+pysqlite:///:memory:",
         create_schema=False,
     )
 
@@ -139,11 +104,10 @@ def test_create_schema_false_preserves_missing_schema_boundary(tmp_path):
     assert response.status_code == 500
 
 
-def test_cors_uses_settings_allow_origins(tmp_path, monkeypatch):
+def test_cors_uses_settings_allow_origins(monkeypatch):
     monkeypatch.setenv("TDGL_CORS_ALLOW_ORIGINS", '["https://client.test"]')
     app = create_app(
         database_url="sqlite+pysqlite:///:memory:",
-        zarr_root=tmp_path / "zarr",
         create_schema=True,
     )
 
@@ -212,7 +176,7 @@ def test_viewer_uses_polished_iv_plot_rendering(client):
     assert "drawIvAxes" in response.text
     assert "drawIvCurve" in response.text
     assert "drawIvAnnotation" in response.text
-    assert "lineJoin = \"round\"" in response.text
+    assert 'lineJoin = "round"' in response.text
 
 
 def test_viewer_demo_creation_exposes_frame_and_grid_options(client):
@@ -277,7 +241,6 @@ def test_viewer_frame_bar_shows_fixed_loaded_frame_count(client):
 
 def test_viewer_sets_frame_bar_scale_before_loading_first_frame(client):
     response = client.get("/viewer")
-
     assert response.status_code == 200
     slider_max_index = response.text.index('els.frameSlider.max = String(state.frames.length - 1)')
     controls_enabled_index = response.text.index("setControlsEnabled(true)")
@@ -336,7 +299,6 @@ def test_create_demo_run_writes_readable_heatmap_frames(client):
 
 def test_dev_app_factory_creates_schema(tmp_path, monkeypatch):
     monkeypatch.setenv("TDGL_DATABASE_URL", f"sqlite+pysqlite:///{tmp_path / 'viewer.db'}")
-    monkeypatch.setenv("TDGL_ZARR_ROOT", str(tmp_path / "zarr"))
 
     app = create_dev_app()
 
@@ -344,32 +306,6 @@ def test_dev_app_factory_creates_schema(tmp_path, monkeypatch):
         response = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
 
     assert response.status_code == 201
-
-
-def test_create_run_cleans_up_zarr_store_when_commit_fails(tmp_path):
-    zarr_root = tmp_path / "zarr"
-    app = create_app(
-        database_url="sqlite+pysqlite:///:memory:",
-        zarr_root=zarr_root,
-        create_schema=True,
-    )
-    engine = app.state.session_factory.kw["bind"]
-
-    def fail_commit(_connection):
-        raise RuntimeError("forced commit failure")
-
-    event.listen(engine, "commit", fail_commit)
-    try:
-        with TestClient(app, raise_server_exceptions=False) as client:
-            response = client.post(
-                "/api/runs",
-                json={"solver_type": "synthetic", "grid_shape": [4, 3]},
-            )
-    finally:
-        event.remove(engine, "commit", fail_commit)
-
-    assert response.status_code == 500
-    assert not list(zarr_root.glob("runs/*/frames.zarr"))
 
 
 def test_append_frame_and_read_timeline_iv_and_frame(client):
@@ -421,10 +357,9 @@ def test_append_duplicate_frame_returns_409(client):
     assert duplicate.json()["detail"] == "Frame already exists"
 
 
-def test_append_commit_failure_leaves_no_readable_frame(tmp_path):
+def test_append_commit_failure_leaves_no_readable_frame():
     app = create_app(
         database_url="sqlite+pysqlite:///:memory:",
-        zarr_root=tmp_path / "zarr",
         create_schema=True,
     )
     engine = app.state.session_factory.kw["bind"]
@@ -457,8 +392,6 @@ def test_append_commit_failure_leaves_no_readable_frame(tmp_path):
 
         assert response.status_code == 500
         assert client.get(f"/api/runs/{run_id}/frames/0").status_code == 404
-        with pytest.raises(IndexError):
-            app.state.zarr_store.read_frame(run_id, 0, fields=("psi_real",))
         timeline = client.get(f"/api/runs/{run_id}/timeline")
         assert timeline.status_code == 200
         assert timeline.json()["frames"] == []
@@ -582,7 +515,6 @@ def test_append_frame_stores_frame_stats(client):
         },
     )
     assert response.status_code == 201
-    # Verify the frame has frame_stats set
     from tdgl_data.repository import get_frame
     session_factory = client.app.state.session_factory
     with session_factory() as session:
@@ -592,14 +524,13 @@ def test_append_frame_stores_frame_stats(client):
         assert "psi_real" in frame.frame_stats
         assert "psi_imag" in frame.frame_stats
         assert "mu" in frame.frame_stats
-        # Verify stats are computed correctly
         assert frame.frame_stats["psi_real"]["min"] == 0.0
         assert frame.frame_stats["psi_real"]["max"] == 1.0
         assert frame.frame_stats["mu"]["min"] == pytest.approx(-0.1)
         assert frame.frame_stats["mu"]["max"] == pytest.approx(0.2)
 
 
-def test_timeline_stats_use_cached_frame_stats_without_zarr_reads(client):
+def test_timeline_stats_use_cached_frame_stats(client):
     created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
     run_id = created.json()["run_id"]
 
@@ -651,12 +582,7 @@ def test_sse_endpoint_exists_for_valid_run(client):
     assert created.status_code == 201
     run_id = created.json()["run_id"]
 
-    # Note: TestClient doesn't properly handle async streaming responses with EventSourceResponse
-    # In production, this endpoint works correctly with proper SSE clients
-    # We can verify the endpoint exists by checking that a HEAD request works
     response = client.head(f"/api/runs/{run_id}/events")
-    # FastAPI may not support HEAD for all endpoints, so we accept either 405 or 200
-    # The important thing is the endpoint exists (doesn't return 404)
     assert response.status_code != 404
 
 
