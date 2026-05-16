@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: data-viewer
-          image: kubeflow-tdgl-data:latest
+          image: ghcr.io/fangrh/tdgl-flow:latest
           ports:
             - containerPort: 8000
           envFrom:

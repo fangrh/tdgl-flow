@@ -15,12 +15,12 @@ spec:
       restartPolicy: Never
       containers:
         - name: generator
-          image: kubeflow-tdgl-data:latest
+          image: ghcr.io/fangrh/tdgl-flow:latest
           command:
             - python
             - -m
             - tdgl_generator.cli
-            - --data-service-url=http://data-service.tdgl.svc.cluster.local
+            - --data-service-url=http://data-viewer.tdgl.svc.cluster.local
           env:
             - name: TDGL_JE_MIN
               value: "-1.0"
