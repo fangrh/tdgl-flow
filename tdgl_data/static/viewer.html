@@ -67,13 +67,7 @@
   <main>
     <header>
       <h1>TDGL Heatmap Viewer</h1>
-      <div class="demo-options" aria-label="Demo run options">
-        <label>X size <input id="demoXSize" type="number" min="1" max="512" value="72"></label>
-        <label>Y size <input id="demoYSize" type="number" min="1" max="512" value="72"></label>
-        <label>Frames <input id="demoFrameCount" type="number" min="1" max="500" value="24"></label>
-        <button id="createDemo" class="primary">Create demo</button>
-      </div>
-    </header>
+          </header>
     <section class="toolbar" aria-label="Run controls">
       <select id="runSelect" aria-label="Run"></select>
       <button id="refreshRuns">Refresh</button>
@@ -151,10 +145,6 @@
       eventSource: null,
     };
     const els = {
-      createDemo: document.getElementById("createDemo"),
-      demoXSize: document.getElementById("demoXSize"),
-      demoYSize: document.getElementById("demoYSize"),
-      demoFrameCount: document.getElementById("demoFrameCount"),
       refreshRuns: document.getElementById("refreshRuns"),
       deleteRun: document.getElementById("deleteRun"),
       runSelect: document.getElementById("runSelect"),
@@ -202,17 +192,7 @@
       return Number.isFinite(value) && value > 0 ? value : fallback;
     }
 
-    function demoRequestBody() {
-      const xSize = positiveIntegerFromInput(els.demoXSize, 72);
-      const ySize = positiveIntegerFromInput(els.demoYSize, 72);
-      const frameCount = positiveIntegerFromInput(els.demoFrameCount, 24);
-      return {
-        frame_count: frameCount,
-        grid_shape: [ySize, xSize],
-        seed: Date.now() % 100000,
-      };
-    }
-
+    
     function formatNumber(value) {
       if (value === undefined || value === null) return "-";
       return Number(value).toPrecision(4);
@@ -762,20 +742,7 @@
       }, delay);
     }
 
-    els.createDemo.addEventListener("click", async () => {
-      try {
-        stopPlayback();
-        setStatus("Creating demo run...");
-        const run = await requestJson("/api/demo-runs", {
-          method: "POST",
-          body: JSON.stringify(demoRequestBody()),
-        });
-        await loadRuns(run.run_id);
-      } catch (error) {
-        setStatus(error.message, true);
-      }
-    });
-
+    
     els.refreshRuns.addEventListener("click", () => {
       stopPlayback();
       loadRuns(state.runId).catch((error) => setStatus(error.message, true));

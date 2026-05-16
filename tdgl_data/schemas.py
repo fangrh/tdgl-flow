@@ -16,10 +16,6 @@ class CreateRunRequest(BaseModel):
     image_tag: str | None = None
 
 
-class CreateDemoRunRequest(BaseModel):
-    frame_count: StrictPositiveInt = 24
-    grid_shape: tuple[StrictPositiveInt, StrictPositiveInt] = Field(default=(64, 64))
-    seed: int = 0
 
 
 class RunResponse(BaseModel):

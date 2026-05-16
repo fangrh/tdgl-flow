@@ -26,7 +26,6 @@ from tdgl_data.repository import (
     list_runs,
 )
 from tdgl_data.schemas import (
-    CreateDemoRunRequest,
     CreateRunRequest,
     FrameAppendRequest,
     FrameMetadataResponse,
@@ -35,7 +34,6 @@ from tdgl_data.schemas import (
     RunResponse,
     TimelineResponse,
 )
-from tdgl_data.synthetic import generate_synthetic_run
 
 
 def _run_response(run: Run) -> RunResponse:
@@ -197,50 +195,7 @@ def create_app(
             session.refresh(run)
         return _run_response(run)
 
-    @app.post("/api/demo-runs", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
-    def api_create_demo_run(body: CreateDemoRunRequest) -> RunResponse:
-        with session_factory() as session:
-            run = create_run(
-                session,
-                solver_type="synthetic",
-                grid_shape=body.grid_shape,
-                device_params={},
-                timing_params={"frame_count": body.frame_count},
-                metadata={"demo": True},
-            )
-            synthetic_frames = list(generate_synthetic_run(
-                body.frame_count,
-                body.grid_shape,
-                seed=body.seed,
-            ))
-            for synthetic_frame in synthetic_frames:
-                frame_arrays = synthetic_frame.arrays()
-                stats = _compute_frame_stats(frame_arrays)
-                frame = append_frame_record(
-                    session,
-                    run_id=run.run_id,
-                    frame_index=synthetic_frame.frame_index,
-                    time_value=synthetic_frame.time_value,
-                    je=synthetic_frame.je,
-                    voltage=synthetic_frame.voltage,
-                    psi_real=frame_arrays["psi_real"].tolist(),
-                    psi_imag=frame_arrays["psi_imag"].tolist(),
-                    mu=frame_arrays["mu"].tolist(),
-                    frame_stats=stats,
-                )
-            session.commit()
-            session.refresh(run)
-            for i, sf in enumerate(synthetic_frames):
-                app.state.event_bus.publish(run.run_id, FrameAvailableEvent(
-                    run_id=run.run_id,
-                    frame_index=sf.frame_index,
-                    time_value=sf.time_value,
-                    je=sf.je,
-                    voltage=sf.voltage,
-                    frame_count=i + 1,
-                ))
-        return _run_response(run)
-
+    
     @app.get("/api/runs", response_model=list[RunResponse])
     def api_list_runs() -> list[RunResponse]:
         with session_factory() as session:
