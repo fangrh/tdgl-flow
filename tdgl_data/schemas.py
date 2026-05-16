@@ -21,7 +21,6 @@ class RunResponse(BaseModel):
     status: str
     solver_type: str
     mesh_metadata: dict
-    zarr_root: str
     device_params: dict
     timing_params: dict
     metadata: dict

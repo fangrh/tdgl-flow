@@ -11,7 +11,6 @@ def create_run(
     *,
     solver_type: str,
     grid_shape: tuple[int, int],
-    zarr_root: str,
     device_params: dict | None = None,
     timing_params: dict | None = None,
     metadata: dict | None = None,
@@ -23,7 +22,6 @@ def create_run(
         solver_type=solver_type,
         status="created",
         mesh_metadata={"grid_shape": list(grid_shape)},
-        zarr_root=zarr_root,
         device_params=device_params or {},
         timing_params=timing_params or {},
         metadata_=metadata or {},
@@ -56,8 +54,9 @@ def append_frame_record(
     time_value: float,
     je: float,
     voltage: float,
-    zarr_group: str,
-    checksum: str | None = None,
+    psi_real: list[list[float]],
+    psi_imag: list[list[float]],
+    mu: list[list[float]],
     frame_stats: dict | None = None,
     status: str = "available",
 ) -> Frame:
@@ -69,8 +68,9 @@ def append_frame_record(
         je=je,
         voltage=voltage,
         status=status,
-        zarr_group=zarr_group,
-        checksum=checksum,
+        psi_real=psi_real,
+        psi_imag=psi_imag,
+        mu=mu,
         frame_stats=frame_stats,
         created_at=now,
         committed_at=now,
@@ -86,12 +86,6 @@ def append_frame_record(
     session.flush()
     return frame
 
-
-def mark_frame_available(session: Session, frame: Frame) -> Frame:
-    frame.status = "available"
-    frame.committed_at = utcnow()
-    session.flush()
-    return frame
 
 
 def delete_frame_record(session: Session, run_id: str, frame_index: int) -> None:

@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -35,17 +34,16 @@ class Run(Base):
     kubeflow_pipeline_id: Mapped[str | None] = mapped_column(String(256))
     kubeflow_task_id: Mapped[str | None] = mapped_column(String(256))
     device_params: Mapped[dict] = mapped_column(
-        MutableDict.as_mutable(json_type), default=dict, nullable=False
+        json_type, default=dict, nullable=False
     )
     timing_params: Mapped[dict] = mapped_column(
-        MutableDict.as_mutable(json_type), default=dict, nullable=False
+        json_type, default=dict, nullable=False
     )
     mesh_metadata: Mapped[dict] = mapped_column(
-        MutableDict.as_mutable(json_type), default=dict, nullable=False
+        json_type, default=dict, nullable=False
     )
-    zarr_root: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_: Mapped[dict] = mapped_column(
-        "metadata", MutableDict.as_mutable(json_type), default=dict, nullable=False
+        "metadata", json_type, default=dict, nullable=False
     )
 
     frames: Mapped[list["Frame"]] = relationship(back_populates="run", cascade="all, delete-orphan")
@@ -68,10 +66,11 @@ class Frame(Base):
     je: Mapped[float] = mapped_column(Float, nullable=False)
     voltage: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
-    zarr_group: Mapped[str] = mapped_column(Text, nullable=False)
-    checksum: Mapped[str | None] = mapped_column(String(128))
+    psi_real: Mapped[list] = mapped_column(json_type, nullable=False)
+    psi_imag: Mapped[list] = mapped_column(json_type, nullable=False)
+    mu: Mapped[list] = mapped_column(json_type, nullable=False)
     frame_stats: Mapped[dict | None] = mapped_column(
-        MutableDict.as_mutable(json_type), default=None, nullable=True
+        json_type, default=None, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
@@ -104,7 +103,7 @@ class RunEvent(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(
-        MutableDict.as_mutable(json_type), default=dict, nullable=False
+        json_type, default=dict, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False

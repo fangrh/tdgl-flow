@@ -1,31 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: data-service
+  name: data-viewer
   namespace: tdgl
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: data-service
+      app: data-viewer
   template:
     metadata:
       labels:
-        app: data-service
+        app: data-viewer
     spec:
       containers:
-        - name: data-service
+        - name: data-viewer
           image: kubeflow-tdgl-data:latest
           ports:
             - containerPort: 8000
           envFrom:
             - secretRef:
-                name: data-service-config
-            - configMapRef:
-                name: data-service-config
-          volumeMounts:
-            - name: zarr-data
-              mountPath: /data/zarr
+                name: data-viewer-config
           livenessProbe:
             httpGet:
               path: /api/runs
@@ -45,7 +40,3 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
-      volumes:
-        - name: zarr-data
-          persistentVolumeClaim:
-            claimName: zarr-data

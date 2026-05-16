@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: data-service-config
-  namespace: tdgl
-data:
-  TDGL_ZARR_ROOT: "/data/zarr"

@@ -1,7 +1,5 @@
 import asyncio
 import json
-import shutil
-from pathlib import Path
 from typing import Annotated
 
 import numpy as np
@@ -26,7 +24,6 @@ from tdgl_data.repository import (
     get_run,
     get_timeline,
     list_runs,
-    mark_frame_available,
 )
 from tdgl_data.schemas import (
     CreateDemoRunRequest,
@@ -39,23 +36,6 @@ from tdgl_data.schemas import (
     TimelineResponse,
 )
 from tdgl_data.synthetic import generate_synthetic_run
-from tdgl_data.zarr_store import FilesystemZarrStore
-
-
-def _remove_zarr_store(zarr_store: FilesystemZarrStore, store_uri: str) -> None:
-    root = zarr_store.root.resolve()
-    path = (root / store_uri).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return
-
-    if path.exists():
-        shutil.rmtree(path)
-    try:
-        path.parent.rmdir()
-    except OSError:
-        pass
 
 
 def _run_response(run: Run) -> RunResponse:
@@ -64,7 +44,6 @@ def _run_response(run: Run) -> RunResponse:
         status=run.status,
         solver_type=run.solver_type,
         mesh_metadata=run.mesh_metadata,
-        zarr_root=run.zarr_root,
         device_params=run.device_params,
         timing_params=run.timing_params,
         metadata=run.metadata_,
@@ -92,8 +71,8 @@ def _grid_shape(run: Run) -> tuple[int, int]:
     return grid_shape[0], grid_shape[1]
 
 
-def _frame_arrays(body: FrameAppendRequest, grid_shape: tuple[int, int]) -> dict[str, np.ndarray]:
-    arrays: dict[str, np.ndarray] = {}
+def _validate_frame_arrays(body: FrameAppendRequest, grid_shape: tuple[int, int]) -> dict[str, list[list[float]]]:
+    arrays: dict[str, list[list[float]]] = {}
     for field in ("psi_real", "psi_imag", "mu"):
         value = getattr(body, field)
         try:
@@ -107,14 +86,15 @@ def _frame_arrays(body: FrameAppendRequest, grid_shape: tuple[int, int]) -> dict
             raise HTTPException(status_code=422, detail=f"{field} must be a rectangular 2D array")
         if array.shape != grid_shape:
             raise HTTPException(status_code=422, detail=f"{field} shape must match run grid_shape")
-        arrays[field] = array
+        arrays[field] = value
     return arrays
 
 
-def _compute_frame_stats(arrays: dict[str, np.ndarray]) -> dict[str, dict[str, float]]:
+def _compute_frame_stats(arrays: dict[str, list[list[float]]]) -> dict[str, dict[str, float]]:
     stats: dict[str, dict[str, float]] = {}
     for name, values in arrays.items():
-        stats[name] = {"min": float(np.min(values)), "max": float(np.max(values))}
+        values_array = np.asarray(values, dtype="float32")
+        stats[name] = {"min": float(np.min(values_array)), "max": float(np.max(values_array))}
     return stats
 
 
@@ -131,24 +111,19 @@ def _update_stats(
 def create_app(
     *,
     database_url: str | None = None,
-    zarr_root: Path | str | None = None,
     create_schema: bool = False,
 ) -> FastAPI:
     settings = Settings()
     if database_url is None:
         database_url = settings.database_url
-    if zarr_root is None:
-        zarr_root = settings.zarr_root
 
     engine = create_engine_from_url(database_url)
     if create_schema:
         Base.metadata.create_all(engine)
     session_factory = create_session_factory(engine)
-    zarr_store = FilesystemZarrStore(zarr_root)
 
     app = FastAPI(title=settings.app_name)
     app.state.session_factory = session_factory
-    app.state.zarr_store = zarr_store
     app.state.event_bus = bus
     app.add_middleware(
         CORSMiddleware,
@@ -164,6 +139,7 @@ def create_app(
 
     @app.get("/viewer", response_class=HTMLResponse)
     def api_viewer() -> HTMLResponse:
+        from pathlib import Path
         viewer_path = Path(__file__).with_name("static") / "viewer.html"
         if not viewer_path.exists():
             raise HTTPException(status_code=500, detail="Viewer asset not found")
@@ -207,96 +183,63 @@ def create_app(
     @app.post("/api/runs", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
     def api_create_run(body: CreateRunRequest) -> RunResponse:
         with session_factory() as session:
-            created_store_uri: str | None = None
-            try:
-                run = create_run(
-                    session,
-                    solver_type=body.solver_type,
-                    grid_shape=body.grid_shape,
-                    zarr_root="pending",
-                    device_params=body.device_params,
-                    timing_params=body.timing_params,
-                    metadata=body.metadata,
-                    git_commit=body.git_commit,
-                    image_tag=body.image_tag,
-                )
-                created_store_uri = zarr_store.create_run_store(
-                    run.run_id,
-                    grid_shape=body.grid_shape,
-                    fields=("psi_real", "psi_imag", "mu"),
-                )
-                run.zarr_root = created_store_uri
-                session.commit()
-            except Exception:
-                session.rollback()
-                if created_store_uri is not None:
-                    _remove_zarr_store(zarr_store, created_store_uri)
-                raise
+            run = create_run(
+                session,
+                solver_type=body.solver_type,
+                grid_shape=body.grid_shape,
+                device_params=body.device_params,
+                timing_params=body.timing_params,
+                metadata=body.metadata,
+                git_commit=body.git_commit,
+                image_tag=body.image_tag,
+            )
+            session.commit()
             session.refresh(run)
-            return _run_response(run)
+        return _run_response(run)
 
     @app.post("/api/demo-runs", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
     def api_create_demo_run(body: CreateDemoRunRequest) -> RunResponse:
         with session_factory() as session:
-            created_store_uri: str | None = None
-            try:
-                run = create_run(
+            run = create_run(
+                session,
+                solver_type="synthetic",
+                grid_shape=body.grid_shape,
+                device_params={},
+                timing_params={"frame_count": body.frame_count},
+                metadata={"demo": True},
+            )
+            synthetic_frames = list(generate_synthetic_run(
+                body.frame_count,
+                body.grid_shape,
+                seed=body.seed,
+            ))
+            for synthetic_frame in synthetic_frames:
+                frame_arrays = synthetic_frame.arrays()
+                stats = _compute_frame_stats(frame_arrays)
+                frame = append_frame_record(
                     session,
-                    solver_type="synthetic",
-                    grid_shape=body.grid_shape,
-                    zarr_root="pending",
-                    device_params={},
-                    timing_params={"frame_count": body.frame_count},
-                    metadata={"demo": True},
+                    run_id=run.run_id,
+                    frame_index=synthetic_frame.frame_index,
+                    time_value=synthetic_frame.time_value,
+                    je=synthetic_frame.je,
+                    voltage=synthetic_frame.voltage,
+                    psi_real=frame_arrays["psi_real"].tolist(),
+                    psi_imag=frame_arrays["psi_imag"].tolist(),
+                    mu=frame_arrays["mu"].tolist(),
+                    frame_stats=stats,
                 )
-                created_store_uri = zarr_store.create_run_store(
-                    run.run_id,
-                    grid_shape=body.grid_shape,
-                    fields=("psi_real", "psi_imag", "mu"),
-                )
-                run.zarr_root = created_store_uri
-                synthetic_frames = list(generate_synthetic_run(
-                    body.frame_count,
-                    body.grid_shape,
-                    seed=body.seed,
-                ))
-                for synthetic_frame in synthetic_frames:
-                    frame_arrays = synthetic_frame.arrays()
-                    stats = _compute_frame_stats(frame_arrays)
-                    frame = append_frame_record(
-                        session,
-                        run_id=run.run_id,
-                        frame_index=synthetic_frame.frame_index,
-                        time_value=synthetic_frame.time_value,
-                        je=synthetic_frame.je,
-                        voltage=synthetic_frame.voltage,
-                        zarr_group=run.zarr_root,
-                        frame_stats=stats,
-                        status="writing",
-                    )
-                    zarr_store.append_frame(
-                        run.run_id,
-                        synthetic_frame.frame_index,
-                        frame_arrays,
-                    )
-                    mark_frame_available(session, frame)
-                session.commit()
-                for i, sf in enumerate(synthetic_frames):
-                    app.state.event_bus.publish(run.run_id, FrameAvailableEvent(
-                        run_id=run.run_id,
-                        frame_index=sf.frame_index,
-                        time_value=sf.time_value,
-                        je=sf.je,
-                        voltage=sf.voltage,
-                        frame_count=i + 1,
-                    ))
-            except Exception:
-                session.rollback()
-                if created_store_uri is not None:
-                    _remove_zarr_store(zarr_store, created_store_uri)
-                raise
+            session.commit()
             session.refresh(run)
-            return _run_response(run)
+            for i, sf in enumerate(synthetic_frames):
+                app.state.event_bus.publish(run.run_id, FrameAvailableEvent(
+                    run_id=run.run_id,
+                    frame_index=sf.frame_index,
+                    time_value=sf.time_value,
+                    je=sf.je,
+                    voltage=sf.voltage,
+                    frame_count=i + 1,
+                ))
+        return _run_response(run)
 
     @app.get("/api/runs", response_model=list[RunResponse])
     def api_list_runs() -> list[RunResponse]:
@@ -317,10 +260,8 @@ def create_app(
             run = get_run(session, run_id)
             if run is None:
                 raise HTTPException(status_code=404, detail="Run not found")
-            store_uri = run.zarr_root
             delete_run(session, run)
             session.commit()
-        _remove_zarr_store(zarr_store, store_uri)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
@@ -336,7 +277,7 @@ def create_app(
             if get_frame(session, run_id, body.frame_index) is not None:
                 raise HTTPException(status_code=409, detail="Frame already exists")
 
-            arrays = _frame_arrays(body, _grid_shape(run))
+            arrays = _validate_frame_arrays(body, _grid_shape(run))
             stats = _compute_frame_stats(arrays)
             try:
                 frame = append_frame_record(
@@ -346,24 +287,18 @@ def create_app(
                     time_value=body.time_value,
                     je=body.je,
                     voltage=body.voltage,
-                    zarr_group=run.zarr_root,
+                    psi_real=arrays["psi_real"],
+                    psi_imag=arrays["psi_imag"],
+                    mu=arrays["mu"],
                     frame_stats=stats,
-                    status="writing",
                 )
             except IntegrityError:
                 session.rollback()
                 raise HTTPException(status_code=409, detail="Frame already exists") from None
             try:
-                zarr_store.append_frame(run_id, body.frame_index, arrays)
-            except Exception:
-                session.rollback()
-                raise
-            try:
-                mark_frame_available(session, frame)
                 session.commit()
             except Exception:
                 session.rollback()
-                zarr_store.clear_frame(run_id, body.frame_index)
                 with session_factory() as cleanup_session:
                     delete_frame_record(cleanup_session, run_id, body.frame_index)
                     cleanup_session.commit()
@@ -428,18 +363,17 @@ def create_app(
             frame = get_frame(session, run_id, frame_index)
             if frame is None or frame.status != "available":
                 raise HTTPException(status_code=404, detail="Frame not found")
-            arrays = zarr_store.read_frame(
-                run_id,
-                frame_index,
-                fields=("psi_real", "psi_imag", "mu"),
-            )
             return FrameResponse(
                 run_id=run_id,
                 frame_index=frame_index,
                 time_value=frame.time_value,
                 je=frame.je,
                 voltage=frame.voltage,
-                arrays={name: values.tolist() for name, values in arrays.items()},
+                arrays={
+                    "psi_real": frame.psi_real,
+                    "psi_imag": frame.psi_imag,
+                    "mu": frame.mu,
+                },
             )
 
     return app
