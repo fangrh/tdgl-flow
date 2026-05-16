@@ -19,6 +19,8 @@ from tdgl_data.repository import (
     create_run,
     delete_frame_record,
     delete_run,
+    get_available_frame_metadata,
+    get_available_iv_points,
     get_frame,
     get_iv_points,
     get_run,
@@ -292,19 +294,20 @@ def create_app(
         with session_factory() as session:
             if get_run(session, run_id) is None:
                 raise HTTPException(status_code=404, detail="Run not found")
-            frames = [
-                frame for frame in get_timeline(session, run_id) if frame.status == "available"
-            ]
+            rows = get_available_frame_metadata(session, run_id)
 
             stats: dict[str, dict[str, float]] = {}
-            for frame in frames:
-                if frame.frame_stats is None:
-                    continue
-                _update_stats(stats, frame.frame_stats)
+            frame_responses = []
+            for fi, tv, je, volt, st, fs in rows:
+                if fs:
+                    _update_stats(stats, fs)
+                frame_responses.append(FrameMetadataResponse(
+                    frame_index=fi, time_value=tv, je=je, voltage=volt, status=st,
+                ))
 
         return TimelineResponse(
             run_id=run_id,
-            frames=[_frame_metadata(frame) for frame in frames],
+            frames=frame_responses,
             stats=stats,
         )
 
@@ -320,8 +323,7 @@ def create_app(
                     je=point.je,
                     voltage=point.voltage,
                 )
-                for point in get_iv_points(session, run_id)
-                if get_frame(session, run_id, point.frame_index).status == "available"
+                for point in get_available_iv_points(session, run_id)
             ]
 
     @app.get("/api/runs/{run_id}/frames/{frame_index}", response_model=FrameResponse)

@@ -107,6 +107,25 @@ def get_frame(session: Session, run_id: str, frame_index: int) -> Frame | None:
     return session.scalar(stmt)
 
 
+def get_available_frame_metadata(session: Session, run_id: str) -> list[tuple]:
+    stmt = (
+        select(Frame.frame_index, Frame.time_value, Frame.je, Frame.voltage, Frame.status, Frame.frame_stats)
+        .where(Frame.run_id == run_id, Frame.status == "available")
+        .order_by(Frame.frame_index)
+    )
+    return list(session.execute(stmt).all())
+
+
+def get_available_iv_points(session: Session, run_id: str) -> list[IVPoint]:
+    stmt = (
+        select(IVPoint)
+        .join(Frame, (Frame.run_id == IVPoint.run_id) & (Frame.frame_index == IVPoint.frame_index))
+        .where(IVPoint.run_id == run_id, Frame.status == "available")
+        .order_by(IVPoint.frame_index)
+    )
+    return list(session.scalars(stmt))
+
+
 def get_timeline(session: Session, run_id: str) -> list[Frame]:
     stmt = select(Frame).where(Frame.run_id == run_id).order_by(Frame.frame_index)
     return list(session.scalars(stmt))
