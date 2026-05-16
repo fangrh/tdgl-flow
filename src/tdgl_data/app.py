@@ -14,6 +14,7 @@ from tdgl_data.config import Settings
 from tdgl_data.db import create_engine_from_url, create_session_factory
 from tdgl_data.events import FrameAvailableEvent, RunCompletedEvent, bus
 from tdgl_data.models import Base, Frame, Run
+from tdgl_data.zarr_store import ZarrStore
 from tdgl_data.repository import (
     append_frame_record,
     create_run,
@@ -129,6 +130,7 @@ def create_app(
     app = FastAPI(title=settings.app_name)
     app.state.session_factory = session_factory
     app.state.event_bus = bus
+    app.state.zarr_store = ZarrStore(settings.zarr_root)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
@@ -198,6 +200,7 @@ def create_app(
                 image_tag=body.image_tag,
                 total_frames=body.total_frames,
             )
+            app.state.zarr_store.create_run(run.run_id, tuple(body.grid_shape))
             session.commit()
             session.refresh(run)
         return _run_response(run)
@@ -234,6 +237,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Run not found")
             delete_run(session, run)
             session.commit()
+        app.state.zarr_store.delete_run(run_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
@@ -251,6 +255,8 @@ def create_app(
 
             arrays = _validate_frame_arrays(body, _grid_shape(run))
             stats = _compute_frame_stats(arrays)
+            np_arrays = {k: np.asarray(v, dtype="float32") for k, v in arrays.items()}
+            app.state.zarr_store.append_frame(run_id, body.frame_index, np_arrays)
             try:
                 frame = append_frame_record(
                     session,
@@ -264,6 +270,7 @@ def create_app(
                     mu=arrays["mu"],
                     frame_stats=stats,
                 )
+                frame.zarr_exists = True
             except IntegrityError:
                 session.rollback()
                 raise HTTPException(status_code=409, detail="Frame already exists") from None
@@ -335,17 +342,22 @@ def create_app(
             frame = get_frame(session, run_id, frame_index)
             if frame is None or frame.status != "available":
                 raise HTTPException(status_code=404, detail="Frame not found")
+            if frame.zarr_exists:
+                zarr_arrays = app.state.zarr_store.get_frame(run_id, frame_index)
+                arrays = {k: v.tolist() for k, v in zarr_arrays.items()}
+            else:
+                arrays = {
+                    "psi_real": frame.psi_real,
+                    "psi_imag": frame.psi_imag,
+                    "mu": frame.mu,
+                }
             return FrameResponse(
                 run_id=run_id,
                 frame_index=frame_index,
                 time_value=frame.time_value,
                 je=frame.je,
                 voltage=frame.voltage,
-                arrays={
-                    "psi_real": frame.psi_real,
-                    "psi_imag": frame.psi_imag,
-                    "mu": frame.mu,
-                },
+                arrays=arrays,
             )
 
     return app
