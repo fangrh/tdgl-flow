@@ -247,7 +247,7 @@ def test_viewer_includes_frame_buffer(client):
     assert response.status_code == 200
     assert "frameBuffer" in response.text
     assert "fillBuffer" in response.text
-    assert "BUFFER_RADIUS" in response.text
+    assert "bufferRadius" in response.text
 
 
 def test_viewer_includes_playback_speed_control(client):

@@ -93,6 +93,7 @@
         <option value="30">8x</option>
       </select></label>
       <label><input id="autoFollow" type="checkbox" checked> Auto-follow</label>
+      <label>Buffer <input id="bufferSize" type="number" min="0" max="20" value="3" aria-label="Buffer radius"></label>
       <input id="frameSlider" type="range" min="0" max="0" value="0" disabled aria-label="Frame">
       <span id="framePositionValue">0 / 0</span>
     </section>
@@ -119,7 +120,7 @@
     <div id="status" class="status"></div>
   </main>
   <script>
-    const BUFFER_RADIUS = 5;
+    let bufferRadius = 3;
 
     const state = {
       runs: [],
@@ -144,6 +145,7 @@
       playbackStep: document.getElementById("playbackStep"),
       playbackSpeed: document.getElementById("playbackSpeed"),
       autoFollow: document.getElementById("autoFollow"),
+      bufferSize: document.getElementById("bufferSize"),
       framePositionValue: document.getElementById("framePositionValue"),
       prevFrame: document.getElementById("prevFrame"),
       playPause: document.getElementById("playPause"),
@@ -265,9 +267,10 @@
     }
 
     async function fillBuffer(centerFrameIndex) {
+      const r = bufferRadius;
       const total = state.totalFrames;
-      const low = Math.max(0, centerFrameIndex - BUFFER_RADIUS);
-      const high = Math.min(total - 1, centerFrameIndex + BUFFER_RADIUS);
+      const low = Math.max(0, centerFrameIndex - r);
+      const high = Math.min(total - 1, centerFrameIndex + r);
       for (let fi = low; fi <= high; fi += 1) {
         if (state.frameBuffer.has(fi)) continue;
         const metadata = state.frames.find(f => f.frame_index === fi);
@@ -278,7 +281,7 @@
         } catch (_error) {}
       }
       for (const key of state.frameBuffer.keys()) {
-        if (key < centerFrameIndex - BUFFER_RADIUS * 2 || key > centerFrameIndex + BUFFER_RADIUS * 2) {
+        if (key < centerFrameIndex - r * 2 || key > centerFrameIndex + r * 2) {
           state.frameBuffer.delete(key);
         }
       }
@@ -540,6 +543,11 @@
         });
       }, delay);
     }
+
+    els.bufferSize.addEventListener("change", () => {
+      const v = Number.parseInt(els.bufferSize.value, 10);
+      if (Number.isFinite(v) && v >= 0) bufferRadius = v;
+    });
 
     els.syncRuns.addEventListener("click", () => {
       els.syncRuns.classList.add("spinning");

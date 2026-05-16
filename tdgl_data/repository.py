@@ -44,6 +44,10 @@ def list_runs(session: Session) -> list[Run]:
 
 
 def delete_run(session: Session, run: Run) -> None:
+    run_id = run.run_id
+    session.execute(delete(RunEvent).where(RunEvent.run_id == run_id))
+    session.execute(delete(IVPoint).where(IVPoint.run_id == run_id))
+    session.execute(delete(Frame).where(Frame.run_id == run_id))
     session.delete(run)
     session.flush()
 
