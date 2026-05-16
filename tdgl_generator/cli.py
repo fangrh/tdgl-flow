@@ -24,6 +24,7 @@ async def run(
         run_resp = await client.post("/api/runs", json={
             "solver_type": "synthetic",
             "grid_shape": [grid_y, grid_x],
+            "total_frames": je_count * frames_per_je,
         })
         run_resp.raise_for_status()
         run_id = run_resp.json()["run_id"]
