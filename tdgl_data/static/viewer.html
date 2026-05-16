@@ -433,6 +433,7 @@
 
     async function loadTimeline(runId) {
       setControlsEnabled(false);
+      state.run = state.runs.find(r => r.run_id === runId) || state.run;
       state.timeline = await requestJson(`/api/runs/${runId}/timeline`);
       state.iv = await requestJson(`/api/runs/${runId}/iv`);
       state.frames = state.timeline.frames;
