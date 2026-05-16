@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     app_name: str = "TDGL Data Viewer"
     database_url: str = "sqlite+pysqlite:///:memory:"
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["*"])
+    zarr_root: str = "/data/zarr"
 
     model_config = SettingsConfigDict(
         env_prefix="TDGL_",
