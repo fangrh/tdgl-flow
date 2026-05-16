@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TDGL Heatmap Viewer</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
   <style>
     :root {
       color-scheme: light;
@@ -12,13 +13,12 @@
       color: #1f2933;
     }
     body { margin: 0; }
-    main { max-width: 1480px; margin: 0 auto; padding: 24px; }
+    main { max-width: 1580px; margin: 0 auto; padding: 24px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
     h1 { margin: 0; font-size: 24px; font-weight: 650; }
-    .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
     .run-list-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .run-list-header h2 { margin: 0; font-size: 15px; font-weight: 650; }
-    .run-list { max-height: 210px; overflow-y: auto; border: 1px solid #c8d0d9; border-radius: 6px; background: #ffffff; margin-bottom: 14px; }
+    .run-list { max-height: 200px; overflow-y: auto; border: 1px solid #c8d0d9; border-radius: 6px; background: #ffffff; margin-bottom: 14px; }
     .run-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #eaedf1; }
     .run-item:last-child { border-bottom: none; }
     .run-item:hover { background: #f0f4f8; }
@@ -28,6 +28,11 @@
     .run-item-meta { font-size: 12px; color: #667381; margin-top: 2px; }
     .run-item-delete { background: none; border: none; color: #9aa5b4; font-size: 18px; padding: 0 4px; min-height: auto; cursor: pointer; line-height: 1; border-radius: 4px; }
     .run-item-delete:hover { color: #d92d20; background: #fef2f2; }
+    .status-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; text-transform: uppercase; }
+    .status-running { background: #fef3c7; color: #92400e; }
+    .status-completed { background: #d1fae5; color: #065f46; }
+    .status-created { background: #e5e7eb; color: #374151; }
+    .status-failed { background: #fee2e2; color: #991b1b; }
     .sync-btn { min-height: 36px; border: 1px solid #c8d0d9; border-radius: 6px; background: #ffffff; color: #1f2933; font: inherit; padding: 0 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
     .sync-btn:hover { background: #f0f4f8; }
     .sync-btn.spinning .sync-icon { animation: spin 0.8s linear infinite; }
@@ -43,41 +48,24 @@
       font: inherit;
       padding: 0 12px;
     }
-    input[type="number"] { width: 76px; }
     button { cursor: pointer; }
-    button.primary { border-color: #0f766e; background: #0f766e; color: #ffffff; }
     button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: 0.55; }
     input[type="range"] { flex: 1 1 320px; min-width: 180px; }
-    .demo-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-    .demo-options label { display: inline-flex; align-items: center; gap: 5px; color: #52606d; font-size: 13px; }
     .meta { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; margin: 14px 0 18px; }
     .metric { border: 1px solid #d9e0e7; border-radius: 6px; background: #ffffff; padding: 10px 12px; }
     .metric span { display: block; color: #667381; font-size: 12px; margin-bottom: 4px; }
     .metric strong { font-size: 16px; font-weight: 650; }
     .plots { display: grid; gap: 16px; }
-    .plots-one-line { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(340px, 1.15fr); align-items: start; }
+    .plots-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(340px, 1fr); }
     .panel { min-width: 0; }
     .panel h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
-    .heatmap-frame { display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 10px; align-items: stretch; }
-    canvas {
-      display: block;
-      width: 100%;
-      aspect-ratio: 1 / 1;
-      border: 1px solid #c8d0d9;
-      border-radius: 6px;
-      background: #ffffff;
-      image-rendering: pixelated;
-    }
-    .colorbar-wrap { display: grid; grid-template-rows: 1fr auto; gap: 6px; min-width: 0; }
-    .colorbar-wrap canvas { aspect-ratio: auto; height: 100%; min-height: 180px; }
-    .colorbar-labels { display: grid; gap: 4px; color: #52606d; font-size: 12px; text-align: center; }
+    .plotly-div { width: 100%; min-height: 420px; }
     .status { min-height: 22px; color: #52606d; margin-top: 12px; }
     .status.error { color: #b42318; }
     @media (max-width: 760px) {
       main { padding: 16px; }
-      header, .plots, .plots-one-line { grid-template-columns: 1fr; display: grid; }
+      .plots-row { grid-template-columns: 1fr; }
       .meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .heatmap-frame { grid-template-columns: minmax(0, 1fr) 46px; }
     }
   </style>
 </head>
@@ -85,7 +73,7 @@
   <main>
     <header>
       <h1>TDGL Heatmap Viewer</h1>
-          </header>
+    </header>
     <div class="run-list-header">
       <h2>Datasets</h2>
       <button class="sync-btn" id="syncRuns" title="Refresh run list">
@@ -114,36 +102,18 @@
       <div class="metric"><span>Je</span><strong id="jeValue">-</strong></div>
       <div class="metric"><span>Voltage</span><strong id="voltageValue">-</strong></div>
     </section>
-    <section class="plots plots-one-line" aria-label="Plots">
+    <section class="plots plots-row" aria-label="Plots">
       <div class="panel">
         <h2>|psi|</h2>
-        <div class="heatmap-frame">
-          <canvas id="psiCanvas" width="512" height="512"></canvas>
-          <div class="colorbar-wrap">
-            <canvas id="psiColorbar" width="40" height="512"></canvas>
-            <div class="colorbar-labels">
-              <span id="psiColorbarMax">-</span>
-              <span id="psiColorbarMin">-</span>
-            </div>
-          </div>
-        </div>
+        <div id="psiPlot" class="plotly-div"></div>
       </div>
       <div class="panel">
         <h2>mu</h2>
-        <div class="heatmap-frame">
-          <canvas id="muCanvas" width="512" height="512"></canvas>
-          <div class="colorbar-wrap">
-            <canvas id="muColorbar" width="40" height="512"></canvas>
-            <div class="colorbar-labels">
-              <span id="muColorbarMax">-</span>
-              <span id="muColorbarMin">-</span>
-            </div>
-          </div>
-        </div>
+        <div id="muPlot" class="plotly-div"></div>
       </div>
-      <div class="panel iv-panel">
+      <div class="panel">
         <h2>I-V curve</h2>
-        <canvas id="ivCanvas" width="640" height="640"></canvas>
+        <div id="ivPlot" class="plotly-div"></div>
       </div>
     </section>
     <div id="status" class="status"></div>
@@ -182,17 +152,17 @@
       timeValue: document.getElementById("timeValue"),
       jeValue: document.getElementById("jeValue"),
       voltageValue: document.getElementById("voltageValue"),
-      psiCanvas: document.getElementById("psiCanvas"),
-      muCanvas: document.getElementById("muCanvas"),
-      psiColorbar: document.getElementById("psiColorbar"),
-      muColorbar: document.getElementById("muColorbar"),
-      psiColorbarMax: document.getElementById("psiColorbarMax"),
-      psiColorbarMin: document.getElementById("psiColorbarMin"),
-      muColorbarMax: document.getElementById("muColorbarMax"),
-      muColorbarMin: document.getElementById("muColorbarMin"),
-      ivCanvas: document.getElementById("ivCanvas"),
       status: document.getElementById("status"),
     };
+
+    const HEATMAP_LAYOUT = {
+      margin: {l: 50, r: 20, t: 10, b: 50},
+      xaxis: {title: "x", constrain: "domain"},
+      yaxis: {title: "y", scaleanchor: "x", constrain: "domain"},
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+    };
+    const HEATMAP_CONFIG = {responsive: true, displayModeBar: false};
 
     function setStatus(message, isError = false) {
       els.status.textContent = message;
@@ -200,7 +170,7 @@
     }
 
     async function requestJson(url, options = {}) {
-      const response = await fetch(url, { headers: {"Content-Type": "application/json"}, ...options });
+      const response = await fetch(url, {headers: {"Content-Type": "application/json"}, ...options});
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`${response.status} ${response.statusText}: ${text}`);
@@ -209,361 +179,89 @@
       return response.json();
     }
 
-    function positiveIntegerFromInput(input, fallback) {
-      const value = Number.parseInt(input.value, 10);
-      return Number.isFinite(value) && value > 0 ? value : fallback;
-    }
-
-    
     function formatNumber(value) {
       if (value === undefined || value === null) return "-";
       return Number(value).toPrecision(4);
-    }
-
-    function minMax(values) {
-      let min = Infinity;
-      let max = -Infinity;
-      for (const row of values) {
-        for (const value of row) {
-          min = Math.min(min, value);
-          max = Math.max(max, value);
-        }
-      }
-      return {min, max};
-    }
-
-    function color(value, min, max) {
-      const span = max - min || 1;
-      const t = Math.max(0, Math.min(1, (value - min) / span));
-      const r = Math.round(33 + 222 * t);
-      const g = Math.round(48 + 120 * (1 - Math.abs(t - 0.5) * 2));
-      const b = Math.round(80 + 150 * (1 - t));
-      return [r, g, b, 255];
-    }
-
-    function staticTickValues(min, max, count = 5) {
-      if (count <= 1) return [min];
-      return Array.from({length: count}, (_, index) => min + ((max - min) * index / (count - 1)));
-    }
-
-    function heatmapCanvasSize(rows, cols) {
-      const maxPlotSide = 500;
-      const plotWidth = cols >= rows ? maxPlotSide : Math.max(1, Math.round(maxPlotSide * cols / rows));
-      const plotHeight = rows >= cols ? maxPlotSide : Math.max(1, Math.round(maxPlotSide * rows / cols));
-      return {
-        width: plotWidth + 58,
-        height: plotHeight + 58,
-        plotWidth,
-        plotHeight,
-      };
-    }
-
-    function heatmapPlotArea(canvas) {
-      return {
-        left: 46,
-        top: 16,
-        width: canvas.width - 58,
-        height: canvas.height - 58,
-      };
-    }
-
-    function drawHeatmapAxes(ctx, canvas, rows, cols, area) {
-      const xMax = Math.max(cols - 1, 0);
-      const yMax = Math.max(rows - 1, 0);
-      const xTicks = [0, Math.floor(xMax / 2), xMax];
-      const yTicks = [0, Math.floor(yMax / 2), yMax];
-
-      ctx.strokeStyle = "#52606d";
-      ctx.fillStyle = "#52606d";
-      ctx.lineWidth = 1;
-      ctx.font = "12px system-ui";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-
-      ctx.beginPath();
-      ctx.rect(area.left, area.top, area.width, area.height);
-      ctx.stroke();
-
-      for (const tick of xTicks) {
-        const x = area.left + (xMax ? tick / xMax : 0) * area.width;
-        ctx.beginPath();
-        ctx.moveTo(x, area.top + area.height);
-        ctx.lineTo(x, area.top + area.height + 5);
-        ctx.stroke();
-        ctx.fillText(String(tick), x, area.top + area.height + 8);
-      }
-
-      ctx.textAlign = "right";
-      ctx.textBaseline = "middle";
-      for (const tick of yTicks) {
-        const y = area.top + (yMax ? tick / yMax : 0) * area.height;
-        ctx.beginPath();
-        ctx.moveTo(area.left - 5, y);
-        ctx.lineTo(area.left, y);
-        ctx.stroke();
-        ctx.fillText(String(tick), area.left - 8, y);
-      }
-    }
-
-    function drawHeatmap(canvas, values, bounds = null) {
-      const rows = values.length;
-      const cols = values[0]?.length || 0;
-      if (!rows || !cols) return;
-      const canvasSize = heatmapCanvasSize(rows, cols);
-      canvas.width = canvasSize.width;
-      canvas.height = canvasSize.height;
-      canvas.style.aspectRatio = `${canvasSize.width} / ${canvasSize.height}`;
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const area = heatmapPlotArea(canvas);
-      const image = ctx.createImageData(cols, rows);
-      const range = bounds || minMax(values);
-      let offset = 0;
-      for (let y = 0; y < rows; y += 1) {
-        for (let x = 0; x < cols; x += 1) {
-          const rgba = color(values[y][x], range.min, range.max);
-          image.data[offset++] = rgba[0];
-          image.data[offset++] = rgba[1];
-          image.data[offset++] = rgba[2];
-          image.data[offset++] = rgba[3];
-        }
-      }
-
-      const bitmap = document.createElement("canvas");
-      bitmap.width = cols;
-      bitmap.height = rows;
-      bitmap.getContext("2d").putImageData(image, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(bitmap, area.left, area.top, area.width, area.height);
-      drawHeatmapAxes(ctx, canvas, rows, cols, area);
-    }
-
-    function updateColorbarLabels(prefix, bounds) {
-      els[`${prefix}ColorbarMax`].textContent = formatNumber(bounds?.max);
-      els[`${prefix}ColorbarMin`].textContent = formatNumber(bounds?.min);
-    }
-
-    function drawColorbarTicks(ctx, canvas, bounds) {
-      const ticks = staticTickValues(bounds.min, bounds.max, 5);
-      ctx.strokeStyle = "#1f2933";
-      ctx.fillStyle = "#1f2933";
-      ctx.lineWidth = 1;
-      ctx.font = "12px system-ui";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      for (const tick of ticks) {
-        const y = 8 + ((bounds.max - tick) / (bounds.max - bounds.min || 1)) * (canvas.height - 16);
-        ctx.beginPath();
-        ctx.moveTo(40, y);
-        ctx.lineTo(47, y);
-        ctx.stroke();
-        ctx.fillText(formatNumber(tick), 50, y);
-      }
-    }
-
-    function drawColorbar(canvas, bounds, labelPrefix) {
-      canvas.width = 112;
-      canvas.height = 512;
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!bounds) {
-        updateColorbarLabels(labelPrefix, null);
-        return;
-      }
-
-      const image = ctx.createImageData(canvas.width, canvas.height);
-      let offset = 0;
-      for (let y = 0; y < canvas.height; y += 1) {
-        const value = bounds.max - ((bounds.max - bounds.min) * y / (canvas.height - 1 || 1));
-        const rgba = color(value, bounds.min, bounds.max);
-        for (let x = 0; x < 40; x += 1) {
-          image.data[offset++] = rgba[0];
-          image.data[offset++] = rgba[1];
-          image.data[offset++] = rgba[2];
-          image.data[offset++] = rgba[3];
-        }
-        for (let x = 40; x < canvas.width; x += 1) {
-          image.data[offset++] = 255;
-          image.data[offset++] = 255;
-          image.data[offset++] = 255;
-          image.data[offset++] = 255;
-        }
-      }
-      ctx.putImageData(image, 0, 0);
-      drawColorbarTicks(ctx, canvas, bounds);
-      updateColorbarLabels(labelPrefix, bounds);
-    }
-
-    function padRange(range) {
-      const span = range.max - range.min || 1;
-      return {min: range.min - span * 0.08, max: range.max + span * 0.08};
-    }
-
-    function ivPlotArea(canvas) {
-      return {
-        left: 70,
-        right: canvas.width - 24,
-        top: 26,
-        bottom: canvas.height - 62,
-      };
-    }
-
-    function ivScales(area, xRange, yRange) {
-      const width = area.right - area.left;
-      const height = area.bottom - area.top;
-      return {
-        xFor: (je) => area.left + ((je - xRange.min) / (xRange.max - xRange.min || 1)) * width,
-        yFor: (voltage) => area.bottom - ((voltage - yRange.min) / (yRange.max - yRange.min || 1)) * height,
-      };
-    }
-
-    function drawIvGrid(ctx, area, xRange, yRange, scales) {
-      const xTicks = staticTickValues(xRange.min, xRange.max, 5);
-      const yTicks = staticTickValues(yRange.min, yRange.max, 5);
-      ctx.strokeStyle = "#e6ebf0";
-      ctx.lineWidth = 1;
-
-      for (const tick of xTicks) {
-        const x = scales.xFor(tick);
-        ctx.beginPath();
-        ctx.moveTo(x, area.top);
-        ctx.lineTo(x, area.bottom);
-        ctx.stroke();
-      }
-
-      for (const tick of yTicks) {
-        const y = scales.yFor(tick);
-        ctx.beginPath();
-        ctx.moveTo(area.left, y);
-        ctx.lineTo(area.right, y);
-        ctx.stroke();
-      }
-    }
-
-    function drawIvAxes(ctx, canvas, area, xRange, yRange, scales) {
-      const xTicks = staticTickValues(xRange.min, xRange.max, 5);
-      const yTicks = staticTickValues(yRange.min, yRange.max, 5);
-      ctx.strokeStyle = "#667381";
-      ctx.fillStyle = "#52606d";
-      ctx.lineWidth = 1;
-      ctx.font = "12px system-ui";
-
-      ctx.beginPath();
-      ctx.rect(area.left, area.top, area.right - area.left, area.bottom - area.top);
-      ctx.stroke();
-
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      for (const tick of xTicks) {
-        const x = scales.xFor(tick);
-        ctx.beginPath();
-        ctx.moveTo(x, area.bottom);
-        ctx.lineTo(x, area.bottom + 5);
-        ctx.stroke();
-        ctx.fillText(formatNumber(tick), x, area.bottom + 8);
-      }
-
-      ctx.textAlign = "right";
-      ctx.textBaseline = "middle";
-      for (const tick of yTicks) {
-        const y = scales.yFor(tick);
-        ctx.beginPath();
-        ctx.moveTo(area.left - 5, y);
-        ctx.lineTo(area.left, y);
-        ctx.stroke();
-        ctx.fillText(formatNumber(tick), area.left - 8, y);
-      }
-
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.fillText("Je", area.left + (area.right - area.left) / 2, canvas.height - 8);
-      ctx.save();
-      ctx.translate(16, area.top + (area.bottom - area.top) / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillText("Voltage", 0, 0);
-      ctx.restore();
-    }
-
-    function drawIvCurve(ctx, points, scales) {
-      ctx.strokeStyle = "#0f766e";
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      points.forEach((point, index) => {
-        const x = scales.xFor(point.je);
-        const y = scales.yFor(point.voltage);
-        if (index === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      });
-      ctx.stroke();
-
-      ctx.fillStyle = "#0f766e";
-      for (const point of points) {
-        ctx.beginPath();
-        ctx.arc(scales.xFor(point.je), scales.yFor(point.voltage), 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    function drawIvAnnotation(ctx, point, scales) {
-      if (!point) return;
-      const dotX = scales.xFor(point.je);
-      const dotY = scales.yFor(point.voltage);
-      ctx.fillStyle = "#d92d20";
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(dotX, dotY, 8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    function drawIvPlot(currentFrameIndex = null) {
-      const canvas = els.ivCanvas;
-      canvas.width = 640;
-      canvas.height = 640;
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!state.iv.length) return;
-
-      const area = ivPlotArea(canvas);
-      const xRange = padRange({
-        min: Math.min(...state.iv.map((point) => point.je)),
-        max: Math.max(...state.iv.map((point) => point.je)),
-      });
-      const yRange = padRange({
-        min: Math.min(...state.iv.map((point) => point.voltage)),
-        max: Math.max(...state.iv.map((point) => point.voltage)),
-      });
-      const scales = ivScales(area, xRange, yRange);
-
-      const currentPoint = state.iv.find((point) => point.frame_index === currentFrameIndex);
-      drawIvGrid(ctx, area, xRange, yRange, scales);
-      drawIvAxes(ctx, canvas, area, xRange, yRange, scales);
-      drawIvCurve(ctx, state.iv, scales);
-      drawIvAnnotation(ctx, currentPoint, scales);
-    }
-
-    function clearCanvas(canvas) {
-      canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
     }
 
     function psiMagnitude(arrays) {
       return arrays.psi_real.map((row, y) => row.map((real, x) => Math.hypot(real, arrays.psi_imag[y][x])));
     }
 
-    function adaptivePsiBounds(current, arrays) {
-      const frameBounds = minMax(psiMagnitude(arrays));
-      if (!current) return frameBounds;
-      const expanded = {
-        min: Math.min(current.min, frameBounds.min),
-        max: Math.max(current.max, frameBounds.max),
+    function renderPsiHeatmap(data, bounds) {
+      const trace = {
+        z: data,
+        type: "heatmap",
+        colorscale: "Viridis",
+        zmin: bounds?.min,
+        zmax: bounds?.max,
+        showscale: true,
+        colorbar: {title: "|psi|", thickness: 15},
       };
-      return (expanded.min === current.min && expanded.max === current.max) ? current : expanded;
+      Plotly.react("psiPlot", [trace], HEATMAP_LAYOUT, HEATMAP_CONFIG);
+    }
+
+    function renderMuHeatmap(data, bounds) {
+      const trace = {
+        z: data,
+        type: "heatmap",
+        colorscale: "RdBu_r",
+        zmin: bounds?.min,
+        zmax: bounds?.max,
+        showscale: true,
+        colorbar: {title: "mu", thickness: 15},
+      };
+      Plotly.react("muPlot", [trace], HEATMAP_LAYOUT, HEATMAP_CONFIG);
+    }
+
+    function renderIvCurve(ivData, currentFrameIndex) {
+      const x = ivData.map(p => p.je);
+      const y = ivData.map(p => p.voltage);
+      const traces = [{
+        x, y,
+        mode: "lines+markers",
+        type: "scatter",
+        name: "I-V",
+        line: {color: "#0f766e", width: 2},
+        marker: {size: 3},
+      }];
+      if (currentFrameIndex !== null && currentFrameIndex !== undefined) {
+        const current = ivData.find(p => p.frame_index === currentFrameIndex);
+        if (current) {
+          traces.push({
+            x: [current.je],
+            y: [current.voltage],
+            mode: "markers",
+            type: "scatter",
+            name: "current",
+            marker: {size: 12, color: "#d92d20", symbol: "x"},
+          });
+        }
+      }
+      const layout = {
+        margin: {l: 60, r: 20, t: 10, b: 50},
+        xaxis: {title: "Je"},
+        yaxis: {title: "Voltage"},
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(0,0,0,0)",
+        showlegend: false,
+      };
+      Plotly.react("ivPlot", traces, layout, {responsive: true, displayModeBar: false});
+    }
+
+    function adaptivePsiBounds(current, arrays) {
+      let min = Infinity, max = -Infinity;
+      for (const row of psiMagnitude(arrays)) {
+        for (const v of row) {
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+      }
+      if (!current) return {min, max};
+      return {
+        min: Math.min(current.min, min),
+        max: Math.max(current.max, max),
+      };
     }
 
     async function fillBuffer(centerFrameIndex) {
@@ -577,9 +275,7 @@
         try {
           const frame = await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
           state.frameBuffer.set(fi, frame);
-        } catch (_error) {
-          // skip failed prefetch
-        }
+        } catch (_error) {}
       }
       for (const key of state.frameBuffer.keys()) {
         if (key < centerFrameIndex - BUFFER_RADIUS * 2 || key > centerFrameIndex + BUFFER_RADIUS * 2) {
@@ -623,9 +319,12 @@
         } else if (els.autoFollow.checked) {
           loadFrame(data.frame_index);
         } else {
-          drawIvPlot(state.currentFrameIndex);
+          renderIvCurve(state.iv, state.currentFrameIndex);
         }
         setStatus(`Frame ${data.frame_index} arrived (${data.frame_count} total).`);
+      });
+      state.eventSource.addEventListener("run_completed", () => {
+        loadRuns(state.runId);
       });
       state.eventSource.onerror = () => {
         setStatus("Event stream disconnected. Reconnecting...", false);
@@ -648,6 +347,13 @@
       els.framePositionValue.textContent = `${frameIndex + 1} / ${total}`;
     }
 
+    function statusBadgeClass(status) {
+      if (status === "running") return "status-running";
+      if (status === "completed") return "status-completed";
+      if (status === "failed") return "status-failed";
+      return "status-created";
+    }
+
     function formatRunDate(run) {
       const created = run.created_at || run.metadata?.created_at;
       if (!created) return "unknown";
@@ -664,7 +370,10 @@
         item.innerHTML = `
           <div class="run-item-info">
             <div class="run-item-id">${run.solver_type} ${run.run_id.slice(0, 8)}</div>
-            <div class="run-item-meta">${formatRunDate(run)} &middot; ${run.status} &middot; ${run.mesh_metadata?.grid_shape?.join("x") || "?"}</div>
+            <div class="run-item-meta">
+              <span class="status-badge ${statusBadgeClass(run.status)}">${run.status}</span>
+              &middot; ${formatRunDate(run)} &middot; ${run.mesh_metadata?.grid_shape?.join("x") || "?"}
+            </div>
           </div>
           <button class="run-item-delete" data-run-id="${run.run_id}" title="Delete run">&times;</button>
         `;
@@ -711,15 +420,12 @@
       } else {
         closeEventSource();
         state.frames = [];
+        state.totalFrames = 0;
         state.psiBounds = null;
         setControlsEnabled(false);
-        clearCanvas(els.psiCanvas);
-        clearCanvas(els.muCanvas);
-        clearCanvas(els.psiColorbar);
-        clearCanvas(els.muColorbar);
-        clearCanvas(els.ivCanvas);
-        updateColorbarLabels("psi", null);
-        updateColorbarLabels("mu", null);
+        Plotly.purge("psiPlot");
+        Plotly.purge("muPlot");
+        Plotly.purge("ivPlot");
         updateFramePositionLabel();
         setStatus("No runs available.");
       }
@@ -731,20 +437,16 @@
       state.iv = await requestJson(`/api/runs/${runId}/iv`);
       state.frames = state.timeline.frames;
       state.totalFrames = state.run?.total_frames || state.frames.length;
-      state.waitingForFrame = null;
       state.frameBuffer.clear();
+      state.waitingForFrame = null;
       closeEventSource();
       if (!state.totalFrames) {
         closeEventSource();
         setControlsEnabled(false);
-        clearCanvas(els.psiCanvas);
-        clearCanvas(els.muCanvas);
-        clearCanvas(els.psiColorbar);
-        clearCanvas(els.muColorbar);
-        clearCanvas(els.ivCanvas);
+        Plotly.purge("psiPlot");
+        Plotly.purge("muPlot");
+        Plotly.purge("ivPlot");
         state.psiBounds = null;
-        updateColorbarLabels("psi", null);
-        updateColorbarLabels("mu", null);
         updateFramePositionLabel();
         setStatus("Selected run has no available frames.");
         return;
@@ -755,9 +457,7 @@
       els.frameSlider.value = "0";
       updateFramePositionLabel(0);
       state.psiBounds = null;
-      if (state.timeline.stats.mu) {
-        drawColorbar(els.muColorbar, state.timeline.stats.mu, "mu");
-      }
+      renderIvCurve(state.iv, null);
       setControlsEnabled(true);
       openEventSource(runId);
       if (state.frames.length) {
@@ -788,17 +488,12 @@
       updateFramePositionLabel(targetFrameIndex);
       const frame = state.frameBuffer.get(targetFrameIndex) || await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
       state.frameBuffer.set(targetFrameIndex, frame);
-      const prevBounds = state.psiBounds;
+      const psiData = psiMagnitude(frame.arrays);
       state.psiBounds = adaptivePsiBounds(state.psiBounds, frame.arrays);
-      if (state.psiBounds !== prevBounds) {
-        drawColorbar(els.psiColorbar, state.psiBounds, "psi");
-      }
-      if (!state.timeline.stats.mu) {
-        drawColorbar(els.muColorbar, minMax(frame.arrays.mu), "mu");
-      }
-      drawHeatmap(els.psiCanvas, psiMagnitude(frame.arrays), state.psiBounds);
-      drawHeatmap(els.muCanvas, frame.arrays.mu, state.timeline.stats.mu || minMax(frame.arrays.mu));
-      drawIvPlot(frame.frame_index);
+      renderPsiHeatmap(psiData, state.psiBounds);
+      const muBounds = state.timeline.stats.mu || null;
+      renderMuHeatmap(frame.arrays.mu, muBounds);
+      renderIvCurve(state.iv, frame.frame_index);
       els.frameValue.textContent = String(frame.frame_index);
       els.timeValue.textContent = formatNumber(frame.time_value);
       els.jeValue.textContent = formatNumber(frame.je);
@@ -844,7 +539,6 @@
         });
       }, delay);
     }
-
 
     els.syncRuns.addEventListener("click", () => {
       els.syncRuns.classList.add("spinning");

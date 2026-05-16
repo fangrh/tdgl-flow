@@ -141,9 +141,9 @@ def test_viewer_includes_iv_curve_plot(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'id="ivCanvas"' in response.text
+    assert 'id="ivPlot"' in response.text
     assert 'I-V curve' in response.text
-    assert "drawIvPlot" in response.text
+    assert "renderIvCurve" in response.text
     assert "/iv" in response.text
 
 
@@ -151,58 +151,45 @@ def test_viewer_includes_fixed_global_colorbars(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'id="psiColorbar"' in response.text
-    assert 'id="muColorbar"' in response.text
+    assert "colorbar" in response.text
     assert "adaptivePsiBounds" in response.text
-    assert "drawColorbar" in response.text
-    assert "psiBounds" in response.text
+    assert "renderPsiHeatmap" in response.text
+    assert "renderMuHeatmap" in response.text
 
 
-def test_viewer_includes_static_tick_rendering(client):
+def test_viewer_includes_plotly_heatmap_rendering(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert "drawHeatmapAxes" in response.text
-    assert "drawColorbarTicks" in response.text
-    assert "staticTickValues" in response.text
-    assert "heatmapPlotArea" in response.text
+    assert "HEATMAP_LAYOUT" in response.text
+    assert "Plotly.react" in response.text
+    assert "colorscale" in response.text
 
 
 def test_viewer_uses_single_row_plot_layout(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'class="plots plots-one-line"' in response.text
-    assert 'class="panel iv-panel"' in response.text
-    assert "plot-wide" not in response.text
+    assert 'class="plots plots-row"' in response.text
 
 
-def test_viewer_uses_polished_iv_plot_rendering(client):
+def test_viewer_uses_plotly_iv_plot_rendering(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'id="ivCanvas" width="640" height="640"' in response.text
-    assert "ivPlotArea" in response.text
-    assert "drawIvGrid" in response.text
-    assert "drawIvAxes" in response.text
-    assert "drawIvCurve" in response.text
-    assert "drawIvAnnotation" in response.text
-    assert 'lineJoin = "round"' in response.text
+    assert "renderIvCurve" in response.text
+    assert "lines+markers" in response.text
+    assert '"scatter"' in response.text
 
 
 
 
-def test_viewer_heatmap_size_follows_grid_aspect_ratio(client):
+def test_viewer_heatmap_uses_plotly_scaleanchor(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert "heatmapCanvasSize" in response.text
-    assert "canvas.style.aspectRatio" in response.text
-    assert "plotWidth" in response.text
-    assert "plotHeight" in response.text
-    assert "area.width" in response.text
-    assert "area.height" in response.text
-    assert "area.size" not in response.text
+    assert "scaleanchor" in response.text
+    assert "constrain" in response.text
 
 
 def test_viewer_can_delete_selected_history_run(client):
