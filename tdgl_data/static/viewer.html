@@ -269,9 +269,8 @@
     async function fillBuffer(centerFrameIndex) {
       const r = bufferRadius;
       const total = state.totalFrames;
-      const low = Math.max(0, centerFrameIndex - r);
       const high = Math.min(total - 1, centerFrameIndex + r);
-      for (let fi = low; fi <= high; fi += 1) {
+      for (let fi = centerFrameIndex; fi <= high; fi += 1) {
         if (state.frameBuffer.has(fi)) continue;
         const metadata = state.frames.find(f => f.frame_index === fi);
         if (!metadata) continue;
@@ -281,7 +280,7 @@
         } catch (_error) {}
       }
       for (const key of state.frameBuffer.keys()) {
-        if (key < centerFrameIndex - r * 2 || key > centerFrameIndex + r * 2) {
+        if (key < centerFrameIndex || key > centerFrameIndex + r * 2) {
           state.frameBuffer.delete(key);
         }
       }
@@ -437,8 +436,12 @@
     async function loadTimeline(runId) {
       setControlsEnabled(false);
       state.run = state.runs.find(r => r.run_id === runId) || state.run;
-      state.timeline = await requestJson(`/api/runs/${runId}/timeline`);
-      state.iv = await requestJson(`/api/runs/${runId}/iv`);
+      const [timeline, iv] = await Promise.all([
+        requestJson(`/api/runs/${runId}/timeline`),
+        requestJson(`/api/runs/${runId}/iv`),
+      ]);
+      state.timeline = timeline;
+      state.iv = iv;
       state.frames = state.timeline.frames;
       state.totalFrames = state.run?.total_frames || state.frames.length;
       state.frameBuffer.clear();
@@ -465,7 +468,7 @@
       setControlsEnabled(true);
       openEventSource(runId);
       if (state.frames.length) {
-        await loadFrame(0);
+        loadFrame(0);
       } else {
         setStatus("Waiting for frames to arrive...");
       }
