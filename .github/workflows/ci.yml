@@ -2,12 +2,12 @@ name: Build and Push Images
 
 on:
   push:
-    branches: [main, feature/*]
+    branches: [main]
   pull_request:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Detect changed paths
         id: changes
@@ -53,17 +55,33 @@ jobs:
         run: |
           SHA=$(git rev-parse --short HEAD)
           docker build -f services/data-viewer/Dockerfile \
-            -t ghcr.io/fangrh/tdgl-data-viewer:latest \
             -t ghcr.io/fangrh/tdgl-data-viewer:$SHA \
             .
-          docker push ghcr.io/fangrh/tdgl-data-viewer --all-tags
+          docker push ghcr.io/fangrh/tdgl-data-viewer:$SHA
 
       - name: Build and push generator
         if: steps.changes.outputs.build_generator == 'true'
         run: |
           SHA=$(git rev-parse --short HEAD)
           docker build -f services/generator/Dockerfile \
-            -t ghcr.io/fangrh/tdgl-generator:latest \
             -t ghcr.io/fangrh/tdgl-generator:$SHA \
             .
-          docker push ghcr.io/fangrh/tdgl-generator --all-tags
+          docker push ghcr.io/fangrh/tdgl-generator:$SHA
+
+      - name: Update manifest tags and commit
+        if: github.ref == 'refs/heads/main' && (steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true')
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.changes.outputs.build_viewer }}" = "true" ]; then
+            sed -i "s|image: ghcr.io/fangrh/tdgl-data-viewer:.*|image: ghcr.io/fangrh/tdgl-data-viewer:$SHA|" services/data-viewer/k8s/deployment.yaml
+            echo "Updated data-viewer tag to $SHA"
+          fi
+          if [ "${{ steps.changes.outputs.build_generator }}" = "true" ]; then
+            sed -i "s|image: ghcr.io/fangrh/tdgl-generator:.*|image: ghcr.io/fangrh/tdgl-generator:$SHA|" services/generator/k8s/job.yaml
+            echo "Updated generator tag to $SHA"
+          fi
+          git add services/data-viewer/k8s/deployment.yaml services/generator/k8s/job.yaml
+          git diff --cached --quiet || git commit -m "ci: update image tags to $SHA"
+          git push
