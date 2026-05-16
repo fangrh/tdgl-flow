@@ -268,9 +268,6 @@ def create_app(
                     time_value=body.time_value,
                     je=body.je,
                     voltage=body.voltage,
-                    psi_real=arrays["psi_real"],
-                    psi_imag=arrays["psi_imag"],
-                    mu=arrays["mu"],
                     frame_stats=stats,
                 )
                 frame.zarr_exists = True

@@ -67,9 +67,9 @@ class Frame(Base):
     je: Mapped[float] = mapped_column(Float, nullable=False)
     voltage: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
-    psi_real: Mapped[list] = mapped_column(json_type, nullable=False)
-    psi_imag: Mapped[list] = mapped_column(json_type, nullable=False)
-    mu: Mapped[list] = mapped_column(json_type, nullable=False)
+    psi_real: Mapped[list | None] = mapped_column(json_type, nullable=True)
+    psi_imag: Mapped[list | None] = mapped_column(json_type, nullable=True)
+    mu: Mapped[list | None] = mapped_column(json_type, nullable=True)
     zarr_exists: Mapped[bool] = mapped_column(default=False, nullable=False)
     frame_stats: Mapped[dict | None] = mapped_column(
         json_type, default=None, nullable=True

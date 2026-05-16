@@ -60,9 +60,9 @@ def append_frame_record(
     time_value: float,
     je: float,
     voltage: float,
-    psi_real: list[list[float]],
-    psi_imag: list[list[float]],
-    mu: list[list[float]],
+    psi_real: list[list[float]] | None = None,
+    psi_imag: list[list[float]] | None = None,
+    mu: list[list[float]] | None = None,
     frame_stats: dict | None = None,
     status: str = "available",
 ) -> Frame:
