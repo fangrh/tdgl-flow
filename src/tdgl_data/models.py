@@ -70,6 +70,7 @@ class Frame(Base):
     psi_real: Mapped[list] = mapped_column(json_type, nullable=False)
     psi_imag: Mapped[list] = mapped_column(json_type, nullable=False)
     mu: Mapped[list] = mapped_column(json_type, nullable=False)
+    zarr_exists: Mapped[bool] = mapped_column(default=False, nullable=False)
     frame_stats: Mapped[dict | None] = mapped_column(
         json_type, default=None, nullable=True
     )
