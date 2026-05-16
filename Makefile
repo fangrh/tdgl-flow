@@ -35,7 +35,7 @@ status:
 	kubectl get pods -n $(NAMESPACE)
 
 port-forward:
-	kubectl port-forward -n kube-system svc/traefik 80:80 --address 0.0.0.0
+	kubectl port-forward -n istio-system svc/istio-ingressgateway 80:80 --address 0.0.0.0
 
 reconcile:
 	flux reconcile kustomization tdgl-infra --with-source
