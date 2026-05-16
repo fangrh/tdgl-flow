@@ -31,6 +31,10 @@ class RunResponse(BaseModel):
     total_frames: int | None = None
 
 
+class UpdateRunStatusRequest(BaseModel):
+    status: str
+
+
 class FrameAppendRequest(BaseModel):
     frame_index: StrictNonNegativeInt
     time_value: float

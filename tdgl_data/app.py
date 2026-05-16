@@ -24,6 +24,7 @@ from tdgl_data.repository import (
     get_run,
     get_timeline,
     list_runs,
+    update_run_status,
 )
 from tdgl_data.schemas import (
     CreateRunRequest,
@@ -33,6 +34,7 @@ from tdgl_data.schemas import (
     IVPointResponse,
     RunResponse,
     TimelineResponse,
+    UpdateRunStatusRequest,
 )
 
 
@@ -198,7 +200,17 @@ def create_app(
             session.refresh(run)
         return _run_response(run)
 
-    
+    @app.patch("/api/runs/{run_id}/status", response_model=RunResponse)
+    def api_update_run_status(run_id: str, body: UpdateRunStatusRequest) -> RunResponse:
+        with session_factory() as session:
+            try:
+                run = update_run_status(session, run_id, body.status)
+            except LookupError:
+                raise HTTPException(status_code=404, detail="Run not found") from None
+            session.commit()
+            session.refresh(run)
+        return _run_response(run)
+
     @app.get("/api/runs", response_model=list[RunResponse])
     def api_list_runs() -> list[RunResponse]:
         with session_factory() as session:

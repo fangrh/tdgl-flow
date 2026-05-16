@@ -113,6 +113,19 @@ def get_iv_points(session: Session, run_id: str) -> list[IVPoint]:
     return list(session.scalars(stmt))
 
 
+def update_run_status(session: Session, run_id: str, status: str) -> Run:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise LookupError(f"Run {run_id} not found")
+    run.status = status
+    if status in ("completed", "failed"):
+        run.completed_at = utcnow()
+    elif status == "running":
+        run.started_at = utcnow()
+    session.flush()
+    return run
+
+
 def complete_run(session: Session, run_id: str) -> Run:
     run = session.get(Run, run_id)
     if run is None:

@@ -29,6 +29,7 @@ async def run(
         run_resp.raise_for_status()
         run_id = run_resp.json()["run_id"]
         print(f"Created run {run_id[:8]}")
+        await client.patch(f"/api/runs/{run_id}/status", json={"status": "running"})
 
         frame_index = 0
         for je_i in range(je_count):
@@ -59,6 +60,7 @@ async def run(
                 await asyncio.sleep(delay_seconds)
 
         print(f"Done. {frame_index} frames generated.")
+        await client.patch(f"/api/runs/{run_id}/status", json={"status": "completed"})
 
 
 def main() -> None:
