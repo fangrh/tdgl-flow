@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,9 +20,10 @@ def session() -> Iterator[Session]:
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def client(tmp_path: Path) -> Iterator[TestClient]:
     app = create_app(
         database_url="sqlite+pysqlite:///:memory:",
+        zarr_root=str(tmp_path / "zarr"),
         create_schema=True,
     )
     with TestClient(app) as test_client:

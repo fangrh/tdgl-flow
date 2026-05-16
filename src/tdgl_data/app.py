@@ -116,11 +116,14 @@ def _update_stats(
 def create_app(
     *,
     database_url: str | None = None,
+    zarr_root: str | None = None,
     create_schema: bool = False,
 ) -> FastAPI:
     settings = Settings()
     if database_url is None:
         database_url = settings.database_url
+    if zarr_root is None:
+        zarr_root = settings.zarr_root
 
     engine = create_engine_from_url(database_url)
     if create_schema:
@@ -130,7 +133,7 @@ def create_app(
     app = FastAPI(title=settings.app_name)
     app.state.session_factory = session_factory
     app.state.event_bus = bus
-    app.state.zarr_store = ZarrStore(settings.zarr_root)
+    app.state.zarr_store = ZarrStore(zarr_root)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,

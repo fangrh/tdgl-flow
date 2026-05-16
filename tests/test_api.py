@@ -100,9 +100,10 @@ def test_create_run_rejects_invalid_grid_shape_dimensions(client, grid_shape):
     assert response.status_code == 422
 
 
-def test_create_schema_false_preserves_missing_schema_boundary():
+def test_create_schema_false_preserves_missing_schema_boundary(tmp_path):
     app = create_app(
         database_url="sqlite+pysqlite:///:memory:",
+        zarr_root=str(tmp_path / "zarr"),
         create_schema=False,
     )
 
@@ -115,10 +116,11 @@ def test_create_schema_false_preserves_missing_schema_boundary():
     assert response.status_code == 500
 
 
-def test_cors_uses_settings_allow_origins(monkeypatch):
+def test_cors_uses_settings_allow_origins(monkeypatch, tmp_path):
     monkeypatch.setenv("TDGL_CORS_ALLOW_ORIGINS", '["https://client.test"]')
     app = create_app(
         database_url="sqlite+pysqlite:///:memory:",
+        zarr_root=str(tmp_path / "zarr"),
         create_schema=True,
     )
 
@@ -267,6 +269,7 @@ def test_root_redirects_to_viewer(client):
 
 def test_dev_app_factory_creates_schema(tmp_path, monkeypatch):
     monkeypatch.setenv("TDGL_DATABASE_URL", f"sqlite+pysqlite:///{tmp_path / 'viewer.db'}")
+    monkeypatch.setenv("TDGL_ZARR_ROOT", str(tmp_path / "zarr"))
 
     app = create_dev_app()
 
@@ -325,9 +328,10 @@ def test_append_duplicate_frame_returns_409(client):
     assert duplicate.json()["detail"] == "Frame already exists"
 
 
-def test_append_commit_failure_leaves_no_readable_frame():
+def test_append_commit_failure_leaves_no_readable_frame(tmp_path):
     app = create_app(
         database_url="sqlite+pysqlite:///:memory:",
+        zarr_root=str(tmp_path / "zarr"),
         create_schema=True,
     )
     engine = app.state.session_factory.kw["bind"]
