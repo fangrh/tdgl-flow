@@ -25,11 +25,22 @@ def test_missing_run_returns_404(client):
 
 def test_delete_run_removes_database_record(client):
     created = client.post(
-        "/api/demo-runs",
-        json={"frame_count": 2, "grid_shape": [3, 4], "seed": 5},
+        "/api/runs",
+        json={"solver_type": "synthetic", "grid_shape": [3, 4]},
     )
     assert created.status_code == 201
     run_id = created.json()["run_id"]
+
+    frame_body = {
+        "frame_index": 0,
+        "time_value": 0.0,
+        "je": 0.0,
+        "voltage": 0.0,
+        "psi_real": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        "psi_imag": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        "mu": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+    }
+    client.post(f"/api/runs/{run_id}/frames", json=frame_body)
 
     deleted = client.delete(f"/api/runs/{run_id}")
 
@@ -179,16 +190,6 @@ def test_viewer_uses_polished_iv_plot_rendering(client):
     assert 'lineJoin = "round"' in response.text
 
 
-def test_viewer_demo_creation_exposes_frame_and_grid_options(client):
-    response = client.get("/viewer")
-
-    assert response.status_code == 200
-    assert 'id="demoXSize"' in response.text
-    assert 'id="demoYSize"' in response.text
-    assert 'id="demoFrameCount"' in response.text
-    assert "demoRequestBody" in response.text
-    assert "frame_count: frameCount" in response.text
-    assert "grid_shape: [ySize, xSize]" in response.text
 
 
 def test_viewer_heatmap_size_follows_grid_aspect_ratio(client):
@@ -276,25 +277,6 @@ def test_root_redirects_to_viewer(client):
     assert response.headers["location"] == "/viewer"
 
 
-def test_create_demo_run_writes_readable_heatmap_frames(client):
-    created = client.post(
-        "/api/demo-runs",
-        json={"frame_count": 3, "grid_shape": [4, 5], "seed": 7},
-    )
-
-    assert created.status_code == 201
-    run_id = created.json()["run_id"]
-
-    timeline = client.get(f"/api/runs/{run_id}/timeline")
-    assert timeline.status_code == 200
-    assert [frame["frame_index"] for frame in timeline.json()["frames"]] == [0, 1, 2]
-
-    frame = client.get(f"/api/runs/{run_id}/frames/1")
-    assert frame.status_code == 200
-    body = frame.json()
-    assert set(body["arrays"]) == {"psi_real", "psi_imag", "mu"}
-    assert len(body["arrays"]["mu"]) == 4
-    assert len(body["arrays"]["mu"][0]) == 5
 
 
 def test_dev_app_factory_creates_schema(tmp_path, monkeypatch):
@@ -576,8 +558,8 @@ def test_sse_returns_404_for_unknown_run(client):
 
 def test_sse_endpoint_exists_for_valid_run(client):
     created = client.post(
-        "/api/demo-runs",
-        json={"frame_count": 2, "grid_shape": [2, 2], "seed": 1},
+        "/api/runs",
+        json={"solver_type": "synthetic", "grid_shape": [2, 2]},
     )
     assert created.status_code == 201
     run_id = created.json()["run_id"]
