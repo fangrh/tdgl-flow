@@ -6,6 +6,8 @@ COPY pyproject.toml .
 RUN pip install --no-cache-dir .
 
 COPY tdgl_data/ tdgl_data/
+COPY tdgl_generator/ tdgl_generator/
+COPY tdgl_generator/ tdgl_generator/
 
 EXPOSE 8000
 
