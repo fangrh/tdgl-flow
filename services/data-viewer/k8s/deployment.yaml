@@ -18,9 +18,15 @@ spec:
           image: ghcr.io/fangrh/tdgl-data-viewer:de9bb2b
           ports:
             - containerPort: 8000
+          env:
+            - name: TDGL_ZARR_ROOT
+              value: /data/zarr
           envFrom:
             - secretRef:
                 name: data-viewer-config
+          volumeMounts:
+            - name: zarr-data
+              mountPath: /data/zarr
           livenessProbe:
             httpGet:
               path: /api/runs
@@ -40,5 +46,9 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "500m"
+      volumes:
+        - name: zarr-data
+          persistentVolumeClaim:
+            claimName: zarr-data
       imagePullSecrets:
         - name: ghcr-secret
