@@ -45,6 +45,7 @@ class Run(Base):
     metadata_: Mapped[dict] = mapped_column(
         "metadata", json_type, default=dict, nullable=False
     )
+    total_frames: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
 
     frames: Mapped[list["Frame"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     iv_points: Mapped[list["IVPoint"]] = relationship(

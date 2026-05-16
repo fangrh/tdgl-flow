@@ -16,6 +16,7 @@ def create_run(
     metadata: dict | None = None,
     git_commit: str | None = None,
     image_tag: str | None = None,
+    total_frames: int | None = None,
 ) -> Run:
     run = Run(
         run_id=str(uuid4()),
@@ -27,6 +28,7 @@ def create_run(
         metadata_=metadata or {},
         git_commit=git_commit,
         image_tag=image_tag,
+        total_frames=total_frames,
     )
     session.add(run)
     session.flush()

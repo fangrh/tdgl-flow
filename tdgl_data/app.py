@@ -45,6 +45,8 @@ def _run_response(run: Run) -> RunResponse:
         device_params=run.device_params,
         timing_params=run.timing_params,
         metadata=run.metadata_,
+        created_at=run.created_at.isoformat() if run.created_at else None,
+        total_frames=run.total_frames,
     )
 
 
@@ -190,6 +192,7 @@ def create_app(
                 metadata=body.metadata,
                 git_commit=body.git_commit,
                 image_tag=body.image_tag,
+                total_frames=body.total_frames,
             )
             session.commit()
             session.refresh(run)

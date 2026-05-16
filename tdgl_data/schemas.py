@@ -14,6 +14,7 @@ class CreateRunRequest(BaseModel):
     metadata: dict = Field(default_factory=dict)
     git_commit: str | None = None
     image_tag: str | None = None
+    total_frames: int | None = None
 
 
 
@@ -26,6 +27,8 @@ class RunResponse(BaseModel):
     device_params: dict
     timing_params: dict
     metadata: dict
+    created_at: str | None = None
+    total_frames: int | None = None
 
 
 class FrameAppendRequest(BaseModel):
