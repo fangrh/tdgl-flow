@@ -4,7 +4,7 @@ ARGOCD_NS   := argocd
 ARGO_VALUES := infra/argo-workflows/helm-values.yaml
 ARGOCD_VALUES := clusters/argocd/helm-values.yaml
 
-.PHONY: install-argo verify-argo port-forward-argo submit-workflow run-generator install-argocd verify-argocd port-forward-argocd apply status disable-traefik
+.PHONY: install-argo verify-argo submit-workflow run-generator install-argocd verify-argocd setup-hosts apply status disable-traefik
 
 # Cluster bootstrap
 
@@ -28,7 +28,7 @@ install-argocd:
 	kubectl apply -k clusters/argocd
 	@echo "==> ArgoCD installed. Get admin password:"
 	@kubectl -n $(ARGOCD_NS) get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
-	@echo "==> Run 'make port-forward-argocd' to access the UI."
+	@echo "==> Run 'make setup-hosts' for access URLs."
 
 verify-argocd:
 	@echo "=== ArgoCD Pods ==="
@@ -38,8 +38,14 @@ verify-argocd:
 	@echo "=== TDGL Pods ==="
 	kubectl get pods -n $(NAMESPACE)
 
-port-forward-argocd:
-	kubectl port-forward -n $(ARGOCD_NS) svc/argocd-server 8080:80 --address 0.0.0.0
+setup-hosts:
+	@echo "Add to /etc/hosts (or Windows hosts file):"
+	@echo "  172.22.133.208 tdgl.local argocd.local workflows.local"
+	@echo ""
+	@echo "Services:"
+	@echo "  http://tdgl.local        - TDGL Data Viewer"
+	@echo "  http://argocd.local      - ArgoCD Dashboard"
+	@echo "  http://workflows.local   - Argo Workflows UI"
 
 apply:
 	kubectl apply -k clusters/argocd
@@ -72,9 +78,6 @@ verify-argo:
 	kubectl get workflows -n $(NAMESPACE)
 	@echo "=== Workflow Templates ==="
 	kubectl get workflowtemplates -n $(NAMESPACE)
-
-port-forward-argo:
-	kubectl port-forward -n $(ARGO_NS) svc/argo-workflows-server 8080:2746 --address 0.0.0.0
 
 submit-workflow:
 	argo submit -n $(NAMESPACE) --from workflowtemplate/cpp-tdgl \
