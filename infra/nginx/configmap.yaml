@@ -20,6 +20,7 @@ data:
 
         location /tdgl/ {
             proxy_pass http://data-viewer.tdgl.svc.cluster.local/;
+            proxy_redirect / /tdgl/;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_http_version 1.1;
@@ -29,6 +30,7 @@ data:
 
         location /argocd/ {
             proxy_pass http://argocd-server.argocd.svc.cluster.local/;
+            proxy_redirect https://localhost/ /argocd/;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_http_version 1.1;

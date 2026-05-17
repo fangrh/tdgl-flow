@@ -275,7 +275,7 @@
         const metadata = state.frames.find(f => f.frame_index === fi);
         if (!metadata) continue;
         try {
-          const frame = await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
+          const frame = await requestJson(`api/runs/${state.runId}/frames/${metadata.frame_index}`);
           state.frameBuffer.set(fi, frame);
         } catch (_error) {}
       }
@@ -295,7 +295,7 @@
 
     function openEventSource(runId) {
       closeEventSource();
-      state.eventSource = new EventSource(`/api/runs/${runId}/events`);
+      state.eventSource = new EventSource(`api/runs/${runId}/events`);
       state.eventSource.addEventListener("frame_available", (event) => {
         const data = JSON.parse(event.data);
         const existing = state.frames.find(f => f.frame_index === data.frame_index);
@@ -402,7 +402,7 @@
       try {
         stopPlayback();
         setStatus("Deleting run...");
-        await requestJson(`/api/runs/${runId}`, {method: "DELETE"});
+        await requestJson(`api/runs/${runId}`, {method: "DELETE"});
         await loadRuns(state.runId === runId ? null : state.runId);
       } catch (error) {
         setStatus(error.message, true);
@@ -410,7 +410,7 @@
     }
 
     async function loadRuns(selectRunId = null) {
-      state.runs = await requestJson("/api/runs");
+      state.runs = await requestJson("api/runs");
       state.runId = selectRunId || state.runId || state.runs[0]?.run_id || null;
       if (state.runId && !state.runs.some(r => r.run_id === state.runId)) {
         state.runId = state.runs[0]?.run_id || null;
@@ -437,8 +437,8 @@
       setControlsEnabled(false);
       state.run = state.runs.find(r => r.run_id === runId) || state.run;
       const [timeline, iv] = await Promise.all([
-        requestJson(`/api/runs/${runId}/timeline`),
-        requestJson(`/api/runs/${runId}/iv`),
+        requestJson(`api/runs/${runId}/timeline`),
+        requestJson(`api/runs/${runId}/iv`),
       ]);
       state.timeline = timeline;
       state.iv = iv;
@@ -493,7 +493,7 @@
       state.currentFrameIndex = targetFrameIndex;
       els.frameSlider.value = String(targetFrameIndex);
       updateFramePositionLabel(targetFrameIndex);
-      const frame = state.frameBuffer.get(targetFrameIndex) || await requestJson(`/api/runs/${state.runId}/frames/${metadata.frame_index}`);
+      const frame = state.frameBuffer.get(targetFrameIndex) || await requestJson(`api/runs/${state.runId}/frames/${metadata.frame_index}`);
       state.frameBuffer.set(targetFrameIndex, frame);
       const psiData = psiMagnitude(frame.arrays);
       state.psiBounds = adaptivePsiBounds(state.psiBounds, frame.arrays);

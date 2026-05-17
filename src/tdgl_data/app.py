@@ -144,7 +144,7 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     def api_root() -> RedirectResponse:
-        return RedirectResponse("/viewer")
+        return RedirectResponse("viewer")
 
     @app.get("/viewer", response_class=HTMLResponse)
     def api_viewer() -> HTMLResponse:
