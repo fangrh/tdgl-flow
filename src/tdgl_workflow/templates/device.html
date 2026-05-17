@@ -103,17 +103,33 @@ document.getElementById("previewBtn").addEventListener("click", async function()
 
         var x = sites.map(function(s) { return s[0]; });
         var y = sites.map(function(s) { return s[1]; });
-        var i_arr = elements.map(function(e) { return e[0]; });
-        var j_arr = elements.map(function(e) { return e[1]; });
-        var k_arr = elements.map(function(e) { return e[2]; });
+
+        // Build triangle edge paths
+        var edgeX = [];
+        var edgeY = [];
+        elements.forEach(function(tri) {
+            var i0 = tri[0], i1 = tri[1], i2 = tri[2];
+            // Draw 3 edges of each triangle
+            edgeX.push(x[i0], x[i1], null);
+            edgeY.push(y[i0], y[i1], null);
+            edgeX.push(x[i1], x[i2], null);
+            edgeY.push(y[i1], y[i2], null);
+            edgeX.push(x[i2], x[i0], null);
+            edgeY.push(y[i2], y[i0], null);
+        });
 
         var traces = [{
-            type: "triangulation",
+            type: "scatter", mode: "lines",
+            x: edgeX, y: edgeY,
+            line: {color: "steelblue", width: 0.3},
+            hoverinfo: "skip",
+            showlegend: false
+        }, {
+            type: "scatter", mode: "markers",
             x: x, y: y,
-            i: i_arr, j: j_arr, k: k_arr,
-            mode: "lines",
-            line: {color: "#6688cc", width: 0.5},
-            hoverinfo: "skip"
+            marker: {color: "#6688cc", size: 2.5},
+            hoverinfo: "skip",
+            showlegend: false
         }];
 
         var shapes = [{
