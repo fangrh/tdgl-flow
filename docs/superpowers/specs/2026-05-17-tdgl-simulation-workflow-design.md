@@ -9,12 +9,14 @@ A unified web application for configuring and running TDGL simulations. The app 
 Single monolith approach (`tdgl-workflow`): one FastAPI container handles device building, timing configuration, and workflow submission. Mesh generation uses the `tdgl` Python library. Static matplotlib plots provide quick-check previews. Simulation execution is delegated to Argo Workflows.
 
 ```
-User → tdgl-workflow (build device) → saves device_params to PostgreSQL
-User → tdgl-workflow (build timing) → saves timing_params to PostgreSQL
-User → tdgl-workflow (submit sim)  → submits Argo Workflow
-Argo → cpp-tdgl-runner container    → streams frames to data-viewer API
-data-viewer                         → user views results via existing viewer
+User → tdgl-workflow (configure device) → in-memory preview
+User → tdgl-workflow (configure timing) → in-memory preview
+User → tdgl-workflow (submit sim)       → saves all params to DB, submits Argo Workflow
+Argo → cpp-tdgl-runner container        → streams frames to data-viewer API
+data-viewer                             → user views results via existing viewer
 ```
+
+Device and timing generation is fast, so previews are generated on-the-fly and held in the browser session. Nothing is persisted to the database until the user submits the full workflow.
 
 ### Services
 
@@ -26,66 +28,35 @@ data-viewer                         → user views results via existing viewer
 
 ## Database Schema
 
-Two new tables in the existing PostgreSQL database, plus a foreign key addition to `runs`.
+No new tables. Device and timing parameters are stored as JSON fields on the existing `runs` table at workflow submission time.
 
-### `devices`
+### `runs` table additions
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `device_id` | UUID (PK) | Auto-generated |
-| `name` | VARCHAR(128) | User-given name |
-| `film_width` | FLOAT | Film width |
-| `film_height` | FLOAT | Film height |
-| `electrode_params` | JSONB | Electrode positions and sizes |
-| `probe_params` | JSONB | Probe point positions |
-| `mesh_edge_length` | FLOAT | Target mesh edge length |
-| `mesh_sites` | JSONB | Generated mesh site coordinates |
-| `mesh_elements` | JSONB | Generated mesh triangulation |
-| `probe_indices` | JSONB | Mesh indices for probe points |
-| `created_at` | TIMESTAMP | Creation time |
-
-### `timing_configs`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `timing_id` | UUID (PK) | Auto-generated |
-| `name` | VARCHAR(128) | User-given name |
-| `je_min` | FLOAT | Starting Je |
-| `je_max` | FLOAT | Ending Je |
-| `je_count` | INT | Number of Je steps |
-| `ramp_time` | FLOAT | Ramp duration per step |
-| `stable_time` | FLOAT | Stable measurement time |
-| `save_time` | FLOAT | Data save window |
-| `currents_data` | JSONB | Full generated current schedule |
-| `created_at` | TIMESTAMP | Creation time |
-
-### `runs` table changes
-
-Add two nullable foreign key columns:
-- `device_id` → `devices.device_id`
-- `timing_id` → `timing_configs.timing_id`
+Add two JSONB columns to store the full device and timing configuration:
+- `device_params` JSONB — film dimensions, electrode positions, probe points, mesh edge length, mesh smoothing, plus generated mesh data (sites, elements, probe_indices)
+- `timing_params` JSONB — Je min/max, step count, ramp/stable/save times, plus generated current schedule
 
 ## UI Pages
+
+The three pages form a linear wizard. Device and timing params are held in browser session state (hidden form fields or local storage) and only persisted to the database on submission.
 
 ### `/device` — Device Builder
 
 - **Form fields:** film width, film height, electrode positions (source/drain coords), probe points, mesh edge length, mesh smoothing rounds
-- **"Build & Preview"** button: generates mesh server-side, renders static matplotlib mesh plot (sites, triangulation, electrodes highlighted)
-- **"Save"** button: stores device to DB, redirects to device list or timing page
+- **"Build & Preview"** button: generates mesh server-side, renders static matplotlib mesh plot (sites, triangulation, electrodes highlighted). Params held in form state, not saved to DB.
+- **"Next: Timing"** button: carries device params forward to the timing page
 
 ### `/timing` — Timing Builder
 
 - **Form fields:** Je min, Je max, step count, ramp time, stable time, save time, optional ramp-down
-- **"Build & Preview"** button: generates current schedule, renders static Je vs time plot showing sweep steps and save windows
-- **"Save"** button: stores timing to DB
+- **"Build & Preview"** button: generates current schedule, renders static Je vs time plot showing sweep steps and save windows. Params held in form state.
+- **"Next: Review & Submit"** button: carries both device and timing params forward
 
-### `/simulate` — Submit Simulation
+### `/simulate` — Review & Submit
 
-- Dropdown to select a saved device
-- Dropdown to select a saved timing
-- Additional solver options: dt, total time, adaptive stepping toggle
-- "Review" shows combined summary of all params
-- "Submit" creates a Run in DB, submits Argo Workflow, shows confirmation with data-viewer link
+- Shows combined summary of device params, timing params
+- Additional solver options form: dt, total time, adaptive stepping toggle
+- "Submit" creates a Run in DB (saves device_params + timing_params as JSONB on the run), submits Argo Workflow, shows confirmation with data-viewer link
 - List of recent runs with status + viewer links below the form
 
 ### Navigation
