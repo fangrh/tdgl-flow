@@ -41,7 +41,7 @@ jobs:
           echo "$CHANGES" | grep -qE "^(src/tdgl_data/|services/data-viewer/)" && VIEWER=true
           echo "$CHANGES" | grep -qE "^(src/tdgl_data/synthetic\.py|src/tdgl_generator/|services/generator/)" && GENERATOR=true
           echo "$CHANGES" | grep -qE "^(src/tdgl_workflow/|services/tdgl-workflow/|pyproject.toml)" && WORKFLOW=true
-          echo "$CHANGES" | grep -qE "^(services/cpp-tdgl-runner/)" && RUNNER=true
+          echo "$CHANGES" | grep -qE "^(services/cpp-tdgl-runner/|src/cpp-tdgl/)" && RUNNER=true
           echo "build_viewer=$VIEWER" >> "$GITHUB_OUTPUT"
           echo "build_generator=$GENERATOR" >> "$GITHUB_OUTPUT"
           echo "build_workflow=$WORKFLOW" >> "$GITHUB_OUTPUT"
