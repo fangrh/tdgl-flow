@@ -81,7 +81,7 @@ document.getElementById("previewBtn").addEventListener("click", async function()
     };
 
     try {
-        var resp = await fetch("/api/preview/mesh", {
+        var resp = await fetch("/workflow/api/preview/mesh", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify(body)
