@@ -117,6 +117,6 @@ jobs:
             sed -i "s|image: ghcr.io/fangrh/cpp-tdgl-runner:.*|image: ghcr.io/fangrh/cpp-tdgl-runner:$SHA|" workflows/cpp-tdgl-sim.yaml
             echo "Updated cpp-tdgl-runner tag to $SHA"
           fi
-          git add services/data-viewer/k8s/deployment.yaml services/generator/k8s/job.yaml services/tdgl-workflow/k8s/deployment.yaml workflows/cpp-tdgl-sim.yaml
+          git add services/data-viewer/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml workflows/cpp-tdgl-sim.yaml
           git diff --cached --quiet || git commit -m "ci: update image tags to $SHA"
           git push
