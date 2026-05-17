@@ -100,7 +100,7 @@ Parameters:
 - `run_id` — links back to DB
 - `device_params` — serialized JSON
 - `timing_params` — serialized JSON
-- `solver_options` — dt, adaptive stepping, etc.
+- `solver_options` — JSON object with: `dt` (initial timestep), `total_time` (simulation duration per Je), `adaptive` (boolean for adaptive stepping), `max_dt` (adaptive step cap)
 
 Single-step container. The `cpp-tdgl-runner` handles the full Je loop internally:
 1. Receives params, generates HDF5 input files for cpp-tdgl
