@@ -20,7 +20,7 @@ class ZarrStore:
         group = zarr.open_group(str(run_path), mode="w")
         chunks = (1,) + grid_shape
         for field in ("psi_real", "psi_imag", "mu"):
-            group.create_dataset(
+            group.create_array(
                 field,
                 shape=(0,) + grid_shape,
                 dtype="float32",
