@@ -4,16 +4,12 @@ from jinja2 import Environment, FileSystemLoader
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from tdgl_workflow.timing import build_timing
-from tdgl_workflow.plots import render_timing_plot
-
 router = APIRouter()
 
-# Create custom Jinja2 environment with caching disabled for Python 3.13 compatibility
 _env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent.parent / "templates")),
     autoescape=True,
-    cache_size=0,  # Disable caching
+    cache_size=0,
 )
 
 
@@ -30,7 +26,6 @@ def timing_page(request: Request):
         "request": request,
         "page": "timing",
         "form": {},
-        "plot_b64": None,
         "has_device": has_device,
     })
 
@@ -55,17 +50,7 @@ async def timing_preview(request: Request):
         "ramp_down": "ramp_down" in form,
     }
 
-    timing_data = build_timing(**params)
-    plot_b64 = render_timing_plot(timing_data)
-
-    timing_params = {k: v for k, v in params.items()}
-    timing_params["schedule"] = {
-        "steps": timing_data["steps"],
-        "ramp_down_steps": timing_data["ramp_down_steps"],
-        "solve_time": timing_data["solve_time"],
-        "n_steps": timing_data["n_steps"],
-    }
-    request.session["timing_params"] = timing_params
+    request.session["timing_params"] = params
 
     if action == "next":
         return RedirectResponse("/simulate", status_code=303)
@@ -74,6 +59,5 @@ async def timing_preview(request: Request):
         "request": request,
         "page": "timing",
         "form": form,
-        "plot_b64": plot_b64,
         "has_device": has_device,
     })

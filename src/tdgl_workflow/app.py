@@ -13,10 +13,12 @@ def create_app() -> FastAPI:
     from tdgl_workflow.routes.device import router as device_router
     from tdgl_workflow.routes.timing import router as timing_router
     from tdgl_workflow.routes.simulate import router as simulate_router
+    from tdgl_workflow.routes.api import router as api_router
 
     app.include_router(device_router)
     app.include_router(timing_router)
     app.include_router(simulate_router)
+    app.include_router(api_router)
 
     @app.get("/")
     def root():

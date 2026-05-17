@@ -3,51 +3,129 @@
 {% block content %}
 <h1>Timing Builder</h1>
 {% if not has_device %}
-<p style="color:#dc2626">Configure a device first. <a href="/device">Go to Device Builder</a></p>
+<p style="color:#dc2626;">Please <a href="/device">configure a device</a> first.</p>
 {% else %}
-<form method="post">
+<form id="timingForm" method="post">
     <div class="field-row">
         <div>
             <label>Je Initial</label>
-            <input type="number" step="any" name="je_initial" value="{{ form.get('je_initial', '0') }}">
+            <input type="number" step="any" name="je_initial" id="je_initial" value="{{ form.get('je_initial', '0') }}">
         </div>
         <div>
             <label>Je Final</label>
-            <input type="number" step="any" name="je_final" value="{{ form.get('je_final', '5') }}">
+            <input type="number" step="any" name="je_final" id="je_final" value="{{ form.get('je_final', '5') }}">
         </div>
         <div>
             <label>Je Step</label>
-            <input type="number" step="any" name="je_step" value="{{ form.get('je_step', '1') }}">
+            <input type="number" step="any" name="je_step" id="je_step" value="{{ form.get('je_step', '1') }}">
         </div>
     </div>
     <div class="field-row">
         <div>
             <label>Ramp Time</label>
-            <input type="number" step="any" name="ramp_time" value="{{ form.get('ramp_time', '0.5') }}">
+            <input type="number" step="any" name="ramp_time" id="ramp_time" value="{{ form.get('ramp_time', '0.5') }}">
         </div>
         <div>
             <label>Stable Time</label>
-            <input type="number" step="any" name="stable_time" value="{{ form.get('stable_time', '2') }}">
+            <input type="number" step="any" name="stable_time" id="stable_time" value="{{ form.get('stable_time', '2') }}">
         </div>
         <div>
             <label>Save Time</label>
-            <input type="number" step="any" name="save_time" value="{{ form.get('save_time', '1') }}">
+            <input type="number" step="any" name="save_time" id="save_time" value="{{ form.get('save_time', '1') }}">
         </div>
     </div>
-    <div>
-        <label>
-            <input type="checkbox" name="ramp_down" {% if form.get('ramp_down') %}checked{% endif %}>
-            Enable ramp-down
+    <div style="margin-bottom:1rem;">
+        <label style="display:inline;font-weight:normal;">
+            <input type="checkbox" name="ramp_down" id="ramp_down" {% if form.get('ramp_down') %}checked{% endif %}>
+            Include ramp-down
         </label>
     </div>
-    <button type="submit" name="action" value="preview">Build &amp; Preview</button>
-    <button type="submit" name="action" value="next" class="secondary">Next: Review &amp; Submit</button>
+    <button type="button" id="previewBtn">Preview Timing</button>
+    <button type="submit" name="action" value="next" class="secondary">Next: Simulate</button>
+    <span id="status" style="margin-left:1rem;color:#64748b;font-size:0.9rem;"></span>
 </form>
-{% if plot_b64 %}
-<div class="preview">
-    <h2>Timing Preview</h2>
-    <img src="data:image/png;base64,{{ plot_b64 }}" alt="Timing preview">
+<div id="timingPlot" class="preview" style="display:none;">
+    <h2>Current Sweep <span id="timingInfo" style="font-weight:normal;color:#64748b;font-size:0.85rem;"></span></h2>
+    <div id="plotDiv"></div>
 </div>
-{% endif %}
+<script>
+document.getElementById("previewBtn").addEventListener("click", async function() {
+    var btn = this;
+    var status = document.getElementById("status");
+    btn.disabled = true;
+    status.textContent = "Building schedule...";
+
+    var body = {
+        je_initial: parseFloat(document.getElementById("je_initial").value),
+        je_final: parseFloat(document.getElementById("je_final").value),
+        je_step: parseFloat(document.getElementById("je_step").value),
+        ramp_time: parseFloat(document.getElementById("ramp_time").value),
+        stable_time: parseFloat(document.getElementById("stable_time").value),
+        save_time: parseFloat(document.getElementById("save_time").value),
+        ramp_down: document.getElementById("ramp_down").checked
+    };
+
+    try {
+        var resp = await fetch("/api/preview/timing", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body)
+        });
+        if (!resp.ok) throw new Error("Server error: " + resp.status);
+        var data = await resp.json();
+
+        var xData = [];
+        var yData = [];
+        var shapes = [];
+
+        data.steps.forEach(function(step) {
+            xData.push(step.ramp_start, step.ramp_end, null);
+            yData.push(step.je_start, step.je_end, null);
+            xData.push(step.ramp_end, step.stable_end, null);
+            yData.push(step.je_end, step.je_end, null);
+            shapes.push({
+                type: "rect",
+                x0: step.save_start, y0: 0,
+                x1: step.save_end, y1: step.je_end * 1.05,
+                fillcolor: "rgba(34,197,94,0.12)",
+                line: {width: 0}
+            });
+        });
+
+        if (data.ramp_down_steps) {
+            data.ramp_down_steps.forEach(function(step) {
+                xData.push(step.ramp_start, step.ramp_end, null);
+                yData.push(step.je_start, step.je_end, null);
+            });
+        }
+
+        var traces = [{
+            x: xData, y: yData,
+            mode: "lines",
+            line: {color: "#2563eb", width: 2},
+            name: "Je sweep"
+        }];
+
+        Plotly.newPlot("plotDiv", traces, {
+            xaxis: {title: "Time", gridcolor: "#e2e8f0"},
+            yaxis: {title: "Je", gridcolor: "#e2e8f0"},
+            shapes: shapes,
+            height: 350,
+            margin: {l: 60, r: 30, t: 30, b: 50},
+            paper_bgcolor: "white",
+            plot_bgcolor: "white",
+            showlegend: false
+        }, {responsive: true});
+
+        document.getElementById("timingPlot").style.display = "block";
+        document.getElementById("timingInfo").textContent =
+            "(" + data.n_steps + " steps, solve_time=" + data.solve_time.toFixed(2) + ")";
+        status.textContent = "";
+    } catch(err) {
+        status.textContent = "Error: " + err.message;
+    }
+    btn.disabled = false;
+});
+</script>
 {% endif %}
 {% endblock %}

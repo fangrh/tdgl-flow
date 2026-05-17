@@ -5,15 +5,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from tdgl_workflow.mesh import build_rectangular_device
-from tdgl_workflow.plots import render_mesh_plot
 
 router = APIRouter()
 
-# Create custom Jinja2 environment with caching disabled for Python 3.13 compatibility
 _env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent.parent / "templates")),
     autoescape=True,
-    cache_size=0,  # Disable caching
+    cache_size=0,
 )
 
 
@@ -45,7 +43,6 @@ def device_page(request: Request):
         "request": request,
         "page": "device",
         "form": {},
-        "plot_b64": None,
     })
 
 
@@ -56,18 +53,17 @@ async def device_preview(request: Request):
     action = form.get("action", "preview")
 
     params = _device_form_data(form)
-    mesh_data = build_rectangular_device(**params)
-    plot_b64 = render_mesh_plot(mesh_data)
 
-    device_params = {k: v for k, v in params.items()}
-    device_params["mesh"] = {
-        "sites": mesh_data["sites"],
-        "elements": mesh_data["elements"],
-        "probe_indices": mesh_data["probe_indices"],
-        "num_sites": mesh_data["num_sites"],
-        "num_elements": mesh_data["num_elements"],
+    request.session["device_params"] = {
+        "film_width": params["film_width"],
+        "film_height": params["film_height"],
+        "elec_width": params["elec_width"],
+        "elec_height": params["elec_height"],
+        "elec_y_offset": params["elec_y_offset"],
+        "probe_points": [list(p) for p in params["probe_points"]],
+        "max_edge_length": params["max_edge_length"],
+        "smooth": params["smooth"],
     }
-    request.session["device_params"] = device_params
 
     if action == "next":
         return RedirectResponse("/timing", status_code=303)
@@ -76,5 +72,4 @@ async def device_preview(request: Request):
         "request": request,
         "page": "device",
         "form": form,
-        "plot_b64": plot_b64,
     })

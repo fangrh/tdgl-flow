@@ -8,8 +8,6 @@ data:
     server {
         listen 80;
 
-        large_client_header_buffers 4 512k;
-
         location / {
             root /usr/share/nginx/html;
             index index.html;
@@ -60,9 +58,6 @@ data:
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_buffer_size 256k;
-            proxy_buffers 8 256k;
-            proxy_busy_buffers_size 256k;
         }
     }
   index.html: |

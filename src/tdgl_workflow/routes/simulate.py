@@ -7,14 +7,15 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from tdgl_workflow.config import Settings
+from tdgl_workflow.mesh import build_rectangular_device
+from tdgl_workflow.timing import build_timing
 
 router = APIRouter()
 
-# Create custom Jinja2 environment with caching disabled for Python 3.13 compatibility
 _env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent.parent / "templates")),
     autoescape=True,
-    cache_size=0,  # Disable caching
+    cache_size=0,
 )
 
 
@@ -74,7 +75,40 @@ async def simulate_submit(request: Request):
     }
 
     settings: Settings = request.app.state.settings
-    num_sites = device_params["mesh"]["num_sites"]
+
+    # Regenerate mesh and timing from stored params
+    mesh_data = build_rectangular_device(
+        film_width=device_params["film_width"],
+        film_height=device_params["film_height"],
+        elec_width=device_params["elec_width"],
+        elec_height=device_params["elec_height"],
+        elec_y_offset=device_params["elec_y_offset"],
+        probe_points=[tuple(p) for p in device_params["probe_points"]],
+        max_edge_length=device_params["max_edge_length"],
+        smooth=device_params["smooth"],
+    )
+
+    timing_data = build_timing(**timing_params)
+
+    num_sites = mesh_data["num_sites"]
+
+    # Build full params with mesh/schedule for data service storage
+    full_device_params = dict(device_params)
+    full_device_params["mesh"] = {
+        "sites": mesh_data["sites"],
+        "elements": mesh_data["elements"],
+        "probe_indices": mesh_data["probe_indices"],
+        "num_sites": mesh_data["num_sites"],
+        "num_elements": mesh_data["num_elements"],
+    }
+
+    full_timing_params = dict(timing_params)
+    full_timing_params["schedule"] = {
+        "steps": timing_data["steps"],
+        "ramp_down_steps": timing_data["ramp_down_steps"],
+        "solve_time": timing_data["solve_time"],
+        "n_steps": timing_data["n_steps"],
+    }
 
     with httpx.Client(timeout=30.0) as client:
         create_resp = client.post(
@@ -82,10 +116,10 @@ async def simulate_submit(request: Request):
             json={
                 "solver_type": "cpp-tdgl",
                 "grid_shape": [num_sites, 1],
-                "device_params": device_params,
-                "timing_params": timing_params,
+                "device_params": full_device_params,
+                "timing_params": full_timing_params,
                 "metadata": {"solver_options": solver_options},
-                "total_frames": timing_params["schedule"]["n_steps"],
+                "total_frames": timing_data["n_steps"],
             },
         )
         create_resp.raise_for_status()
@@ -129,8 +163,8 @@ async def simulate_submit(request: Request):
         "page": "simulate",
         "has_device": True,
         "has_timing": True,
-        "device_params": device_params,
-        "timing_params": timing_params,
+        "device_params": full_device_params,
+        "timing_params": full_timing_params,
         "submitted": True,
         "run_id": run_id,
         "viewer_url": "/tdgl/viewer",
