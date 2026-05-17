@@ -6,6 +6,7 @@ Je-step by Je-step, and streams frame data back.
 Environment variables:
     TDGL_RUN_ID           - Run ID to fetch config for
     TDGL_DATA_SERVICE_URL - Base URL of the data-viewer service
+    TDGL_SOLVER_PATH      - Path to tdgl_solve binary (default: /app/tdgl_solve)
 """
 
 import os
