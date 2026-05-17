@@ -162,8 +162,8 @@ async def simulate_submit(request: Request):
                     "parameters": [
                         {"name": "run-id", "value": run_id},
                         {"name": "data-service-url", "value": settings.data_service_url},
-                        {"name": "cpu-cores", "value": str(cpu_cores)},
-                        {"name": "memory-gb", "value": str(memory_gb)},
+                        {"name": "cpu", "value": str(cpu_cores)},
+                        {"name": "memory", "value": f"{memory_gb}Gi"},
                     ],
                 },
             },

@@ -12,10 +12,10 @@ spec:
         value: "http://data-viewer.tdgl.svc.cluster.local"
       - name: image
         value: "ghcr.io/fangrh/cpp-tdgl-runner:406037b"
-      - name: cpu-cores
+      - name: cpu
         value: "2"
-      - name: memory-gb
-        value: "4"
+      - name: memory
+        value: "4Gi"
   entrypoint: simulate
   templates:
     - name: simulate
@@ -29,8 +29,8 @@ spec:
             value: "{{workflow.parameters.data-service-url}}"
         resources:
           requests:
-            cpu: "{{workflow.parameters.cpu-cores}}"
-            memory: "{{workflow.parameters.memory-gb}}Gi"
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
           limits:
-            cpu: "{{workflow.parameters.cpu-cores}}"
-            memory: "{{workflow.parameters.memory-gb}}Gi"
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
