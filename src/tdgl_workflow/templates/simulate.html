@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Review &amp; Submit{% endblock %}
+{% block content %}
+<h1>Review &amp; Submit</h1>
+
+{% if not has_device or not has_timing %}
+<div class="summary">
+    {% if not has_device %}
+    <p>Configure a <a href="/device">device</a> first.</p>
+    {% endif %}
+    {% if not has_timing %}
+    <p>Configure a <a href="/timing">timing sequence</a> first.</p>
+    {% endif %}
+</div>
+{% elif submitted %}
+<div class="summary">
+    <h2>Workflow Submitted</h2>
+    <p>Run ID: <strong>{{ run_id }}</strong></p>
+    <p><a href="{{ viewer_url }}" target="_blank">View in Data Viewer</a></p>
+</div>
+{% else %}
+<div class="summary">
+    <h2>Device Configuration</h2>
+    <dl>
+        <dt>Film</dt>
+        <dd>{{ device_params.get("film_width", "") }} x {{ device_params.get("film_height", "") }}</dd>
+        <dt>Mesh</dt>
+        <dd>{{ device_params.get("mesh", {}).get("num_sites", "") }} sites, {{ device_params.get("mesh", {}).get("num_elements", "") }} elements</dd>
+        <dt>Probes</dt>
+        <dd>{{ device_params.get("probe_points", "") }}</dd>
+    </dl>
+</div>
+<div class="summary">
+    <h2>Timing Configuration</h2>
+    <dl>
+        <dt>Je Range</dt>
+        <dd>{{ timing_params.get("je_initial", "") }} to {{ timing_params.get("je_final", "") }} (step {{ timing_params.get("je_step", "") }})</dd>
+        <dt>Steps</dt>
+        <dd>{{ timing_params.get("schedule", {}).get("n_steps", "") }}</dd>
+        <dt>Solve Time</dt>
+        <dd>{{ timing_params.get("schedule", {}).get("solve_time", "") }}</dd>
+        <dt>Ramp Down</dt>
+        <dd>{{ "Yes" if timing_params.get("ramp_down") else "No" }}</dd>
+    </dl>
+</div>
+<form method="post">
+    <div class="field-row">
+        <div>
+            <label>Initial dt</label>
+            <input type="number" step="any" name="dt" value="1e-6">
+        </div>
+        <div>
+            <label>Max dt</label>
+            <input type="number" step="any" name="max_dt" value="0.1">
+        </div>
+        <div>
+            <label>Adaptive Stepping</label>
+            <select name="adaptive">
+                <option value="true" selected>Yes</option>
+                <option value="false">No</option>
+            </select>
+        </div>
+    </div>
+    <button type="submit">Submit Simulation</button>
+</form>
+{% endif %}
+
+{% if runs %}
+<h2>Recent Runs</h2>
+<table>
+    <tr><th>Run ID</th><th>Status</th><th>Created</th><th></th></tr>
+    {% for run in runs %}
+    <tr>
+        <td>{{ run.run_id[:8] }}</td>
+        <td>{{ run.status }}</td>
+        <td>{{ run.created_at }}</td>
+        <td><a href="{{ run.viewer_url }}" target="_blank">View</a></td>
+    </tr>
+    {% endfor %}
+</table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Timing Builder{% endblock %}
+{% block content %}
+<h1>Timing Builder</h1>
+{% if not has_device %}
+<p style="color:#dc2626">Configure a device first. <a href="/device">Go to Device Builder</a></p>
+{% else %}
+<form method="post">
+    <div class="field-row">
+        <div>
+            <label>Je Initial</label>
+            <input type="number" step="any" name="je_initial" value="{{ form.get('je_initial', '0') }}">
+        </div>
+        <div>
+            <label>Je Final</label>
+            <input type="number" step="any" name="je_final" value="{{ form.get('je_final', '5') }}">
+        </div>
+        <div>
+            <label>Je Step</label>
+            <input type="number" step="any" name="je_step" value="{{ form.get('je_step', '1') }}">
+        </div>
+    </div>
+    <div class="field-row">
+        <div>
+            <label>Ramp Time</label>
+            <input type="number" step="any" name="ramp_time" value="{{ form.get('ramp_time', '0.5') }}">
+        </div>
+        <div>
+            <label>Stable Time</label>
+            <input type="number" step="any" name="stable_time" value="{{ form.get('stable_time', '2') }}">
+        </div>
+        <div>
+            <label>Save Time</label>
+            <input type="number" step="any" name="save_time" value="{{ form.get('save_time', '1') }}">
+        </div>
+    </div>
+    <div>
+        <label>
+            <input type="checkbox" name="ramp_down" {% if form.get('ramp_down') %}checked{% endif %}>
+            Enable ramp-down
+        </label>
+    </div>
+    <button type="submit" name="action" value="preview">Build &amp; Preview</button>
+    <button type="submit" name="action" value="next" class="secondary">Next: Review &amp; Submit</button>
+</form>
+{% if plot_b64 %}
+<div class="preview">
+    <h2>Timing Preview</h2>
+    <img src="data:image/png;base64,{{ plot_b64 }}" alt="Timing preview">
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Device Builder{% endblock %}
+{% block content %}
+<h1>Device Builder</h1>
+<form method="post">
+    <div class="field-row">
+        <div>
+            <label>Film Width</label>
+            <input type="number" step="any" name="film_width" value="{{ form.get('film_width', '10') }}">
+        </div>
+        <div>
+            <label>Film Height</label>
+            <input type="number" step="any" name="film_height" value="{{ form.get('film_height', '2') }}">
+        </div>
+    </div>
+    <div class="field-row">
+        <div>
+            <label>Electrode Width</label>
+            <input type="number" step="any" name="elec_width" value="{{ form.get('elec_width', '0.5') }}">
+        </div>
+        <div>
+            <label>Electrode Height</label>
+            <input type="number" step="any" name="elec_height" value="{{ form.get('elec_height', '1') }}">
+        </div>
+        <div>
+            <label>Electrode Y Offset</label>
+            <input type="number" step="any" name="elec_y_offset" value="{{ form.get('elec_y_offset', '0') }}">
+        </div>
+    </div>
+    <div class="field-row">
+        <div>
+            <label>Probe 1 (x, y)</label>
+            <input type="number" step="any" name="probe1_x" value="{{ form.get('probe1_x', '-3') }}">
+            <input type="number" step="any" name="probe1_y" value="{{ form.get('probe1_y', '0') }}">
+        </div>
+        <div>
+            <label>Probe 2 (x, y)</label>
+            <input type="number" step="any" name="probe2_x" value="{{ form.get('probe2_x', '3') }}">
+            <input type="number" step="any" name="probe2_y" value="{{ form.get('probe2_y', '0') }}">
+        </div>
+    </div>
+    <div class="field-row">
+        <div>
+            <label>Max Edge Length</label>
+            <input type="number" step="any" name="max_edge_length" value="{{ form.get('max_edge_length', '1.0') }}">
+        </div>
+        <div>
+            <label>Smooth Iterations</label>
+            <input type="number" name="smooth" value="{{ form.get('smooth', '100') }}">
+        </div>
+    </div>
+    <button type="submit" name="action" value="preview">Build &amp; Preview</button>
+    <button type="submit" name="action" value="next" class="secondary">Next: Timing</button>
+</form>
+{% if plot_b64 %}
+<div class="preview">
+    <h2>Mesh Preview</h2>
+    <img src="data:image/png;base64,{{ plot_b64 }}" alt="Mesh preview">
+</div>
+{% endif %}
+{% endblock %}

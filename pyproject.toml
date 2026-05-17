@@ -34,11 +34,12 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["tdgl_data*", "tdgl_generator*"]
+include = ["tdgl_data*", "tdgl_generator*", "tdgl_workflow*"]
 
 [tool.setuptools.package-data]
 tdgl_data = ["static/*.html"]
 tdgl_generator = ["static/*.html"]
+tdgl_workflow = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
