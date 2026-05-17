@@ -1,0 +1,45 @@
+# Argo Workflows Helm values for single-node k3s
+# helm install argo-workflows argo/argo-workflows -n argo -f infra/argo-workflows/helm-values.yaml
+
+crds:
+  install: false
+
+singleNamespace: true
+
+controller:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  workflowNamespaces:
+    - tdgl
+  rbac:
+    create: true
+
+server:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 2746
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  rbac:
+    create: true
+  secure: false
+
+executor:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
