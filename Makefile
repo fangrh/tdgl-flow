@@ -4,7 +4,7 @@ ARGOCD_NS   := argocd
 ARGO_VALUES := infra/argo-workflows/helm-values.yaml
 ARGOCD_VALUES := clusters/argocd/helm-values.yaml
 
-.PHONY: install-argo verify-argo submit-workflow run-generator install-argocd verify-argocd setup-hosts apply status disable-traefik
+.PHONY: install-argo verify-argo submit-workflow run-generator install-argocd verify-argocd gateway apply status disable-traefik
 
 # Cluster bootstrap
 
@@ -28,7 +28,7 @@ install-argocd:
 	kubectl apply -k clusters/argocd
 	@echo "==> ArgoCD installed. Get admin password:"
 	@kubectl -n $(ARGOCD_NS) get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
-	@echo "==> Run 'make setup-hosts' for access URLs."
+	@echo "==> Run 'make gateway' to access all services."
 
 verify-argocd:
 	@echo "=== ArgoCD Pods ==="
@@ -38,14 +38,8 @@ verify-argocd:
 	@echo "=== TDGL Pods ==="
 	kubectl get pods -n $(NAMESPACE)
 
-setup-hosts:
-	@echo "Add to /etc/hosts (or Windows hosts file):"
-	@echo "  172.22.133.208 tdgl.local argocd.local workflows.local"
-	@echo ""
-	@echo "Services:"
-	@echo "  http://tdgl.local        - TDGL Data Viewer"
-	@echo "  http://argocd.local      - ArgoCD Dashboard"
-	@echo "  http://workflows.local   - Argo Workflows UI"
+gateway:
+	kubectl port-forward -n $(NAMESPACE) svc/gateway 8080:80 --address 0.0.0.0
 
 apply:
 	kubectl apply -k clusters/argocd
@@ -84,12 +78,13 @@ submit-workflow:
 		-p image=127.0.0.1:5050/cpp-tdgl:latest \
 		-p config-json='{}'
 
+run-generator:
+	argo submit -n $(NAMESPACE) --from workflowtemplate/tdgl-generator
+
 # Traefik management
 
 disable-traefik:
 	@echo "==> Disabling Traefik..."
 	kubectl -n kube-system delete helmcharts.helm.cattle.io traefik 2>/dev/null || true
-	kubectl -n kube-system delete helmcharts.helm.cattle.io traefo-crd 2>/dev/null || true
+	kubectl -n kube-system delete helmcharts.helm.cattle.io traefik-crd 2>/dev/null || true
 	@echo "==> Traefik disabled. Restart k3s with --disable traefik for persistence."
-run-generator:
-	argo submit -n $(NAMESPACE) --from workflowtemplate/tdgl-generator
