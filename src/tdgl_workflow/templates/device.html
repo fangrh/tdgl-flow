@@ -189,4 +189,58 @@ document.getElementById("previewBtn").addEventListener("click", async function()
     btn.disabled = false;
 });
 </script>
+<script>
+// Load saved params from localStorage
+(function() {
+    var saved = localStorage.getItem("tdgl_device_params");
+    if (saved) {
+        try {
+            var p = JSON.parse(saved);
+            var fields = {
+                "film_width": p.film_width, "film_height": p.film_height,
+                "elec_width": p.elec_width, "elec_height": p.elec_height,
+                "elec_y_offset": p.elec_y_offset,
+                "max_edge_length": p.max_edge_length, "smooth": p.smooth
+            };
+            for (var k in fields) {
+                var el = document.getElementById(k);
+                if (el && fields[k] !== undefined) el.value = fields[k];
+            }
+            if (p.probe_points) {
+                document.getElementById("probe1_x").value = p.probe_points[0][0];
+                document.getElementById("probe1_y").value = p.probe_points[0][1];
+                document.getElementById("probe2_x").value = p.probe_points[1][0];
+                document.getElementById("probe2_y").value = p.probe_points[1][1];
+            }
+        } catch(e) {}
+    }
+})();
+
+function saveDeviceParams() {
+    var params = {
+        film_width: parseFloat(document.getElementById("film_width").value),
+        film_height: parseFloat(document.getElementById("film_height").value),
+        elec_width: parseFloat(document.getElementById("elec_width").value),
+        elec_height: parseFloat(document.getElementById("elec_height").value),
+        elec_y_offset: parseFloat(document.getElementById("elec_y_offset").value),
+        probe_points: [
+            [parseFloat(document.getElementById("probe1_x").value),
+             parseFloat(document.getElementById("probe1_y").value)],
+            [parseFloat(document.getElementById("probe2_x").value),
+             parseFloat(document.getElementById("probe2_y").value)]
+        ],
+        max_edge_length: parseFloat(document.getElementById("max_edge_length").value),
+        smooth: parseInt(document.getElementById("smooth").value)
+    };
+    localStorage.setItem("tdgl_device_params", JSON.stringify(params));
+    return params;
+}
+
+// Override preview button to also save
+var origPreviewHandler = document.getElementById("previewBtn").onclick;
+// Save on form submit too (Next: Timing button)
+document.getElementById("deviceForm").addEventListener("submit", function() {
+    saveDeviceParams();
+});
+</script>
 {% endblock %}

@@ -43,26 +43,132 @@
         <dd>{{ "Yes" if timing_params.get("ramp_down") else "No" }}</dd>
     </dl>
 </div>
-<form method="post">
+<form id="simForm" method="post">
+    <h2>Solver Options</h2>
     <div class="field-row">
         <div>
             <label>Initial dt</label>
-            <input type="number" step="any" name="dt" value="1e-6">
+            <input type="number" step="any" name="dt" id="dt" value="1e-6">
         </div>
         <div>
             <label>Max dt</label>
-            <input type="number" step="any" name="max_dt" value="0.1">
+            <input type="number" step="any" name="max_dt" id="max_dt" value="0.1">
         </div>
         <div>
             <label>Adaptive Stepping</label>
-            <select name="adaptive">
+            <select name="adaptive" id="adaptive">
                 <option value="true" selected>Yes</option>
                 <option value="false">No</option>
             </select>
         </div>
     </div>
+
+    <h2>Resource Configuration</h2>
+    <div id="clusterInfo" style="font-size:0.85rem;color:#64748b;margin-bottom:0.75rem;">Loading cluster resources...</div>
+    <div class="field-row">
+        <div>
+            <label>CPU Cores</label>
+            <input type="number" step="0.5" min="0.5" name="cpu_cores" id="cpu_cores" value="2">
+        </div>
+        <div>
+            <label>Memory (GB)</label>
+            <input type="number" step="0.5" min="0.5" name="memory_gb" id="memory_gb" value="4">
+        </div>
+        <div>
+            <label>&nbsp;</label>
+            <button type="button" id="recommendBtn" style="background:#64748b;font-size:0.85rem;padding:0.4rem 0.8rem;">Auto Recommend</button>
+        </div>
+    </div>
+    <div id="recommendInfo" style="font-size:0.85rem;color:#64748b;margin-bottom:0.75rem;"></div>
+
     <button type="submit">Submit Simulation</button>
 </form>
+<script>
+(function() {
+    var clusterRes = null;
+
+    // Fetch cluster resources
+    fetch("/workflow/api/cluster/resources")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            clusterRes = data;
+            var info = document.getElementById("clusterInfo");
+            var text = "Cluster: " + data.nodes + " node(s), " +
+                data.cpu_cores + " CPU cores, " + data.memory_gb + " GB RAM available";
+            if (data.error) text += " (fallback values)";
+            info.textContent = text;
+            info.style.color = data.error ? "#f59e0b" : "#2563eb";
+        })
+        .catch(function() {
+            document.getElementById("clusterInfo").textContent = "Cluster: unable to fetch resources";
+        });
+
+    // Estimate mesh size from displayed params
+    var numSites = 0;
+    var meshInfo = document.querySelector("dt");
+    if (meshInfo) {
+        var dd = meshInfo.nextElementSibling;
+        if (dd) {
+            var m = dd.textContent.match(/(\d+)\s+sites/);
+            if (m) numSites = parseInt(m[1]);
+        }
+    }
+
+    // Recommendation based on mesh size
+    document.getElementById("recommendBtn").addEventListener("click", function() {
+        var sites = numSites;
+        if (!sites || sites < 100) {
+            document.getElementById("recommendInfo").textContent = "No mesh data available. Build device first.";
+            return;
+        }
+
+        var recCpu, recMem;
+        if (sites <= 500) { recCpu = 1; recMem = 2; }
+        else if (sites <= 2000) { recCpu = 2; recMem = 4; }
+        else if (sites <= 5000) { recCpu = 4; recMem = 8; }
+        else if (sites <= 15000) { recCpu = 6; recMem = 12; }
+        else if (sites <= 30000) { recCpu = 8; recMem = 16; }
+        else { recCpu = 10; recMem = 24; }
+
+        // Cap at cluster max
+        if (clusterRes) {
+            recCpu = Math.min(recCpu, Math.floor(clusterRes.cpu_cores * 0.9));
+            recMem = Math.min(recMem, Math.floor(clusterRes.memory_gb * 0.85));
+            recCpu = Math.max(recCpu, 0.5);
+            recMem = Math.max(recMem, 1);
+        }
+
+        document.getElementById("cpu_cores").value = recCpu;
+        document.getElementById("memory_gb").value = recMem;
+        document.getElementById("recommendInfo").textContent =
+            "Recommended for " + sites + " sites: " + recCpu + " cores, " + recMem + " GB";
+    });
+
+    // Load saved resource params
+    var saved = localStorage.getItem("tdgl_simulate_params");
+    if (saved) {
+        try {
+            var p = JSON.parse(saved);
+            if (p.cpu_cores !== undefined) document.getElementById("cpu_cores").value = p.cpu_cores;
+            if (p.memory_gb !== undefined) document.getElementById("memory_gb").value = p.memory_gb;
+            if (p.dt !== undefined) document.getElementById("dt").value = p.dt;
+            if (p.max_dt !== undefined) document.getElementById("max_dt").value = p.max_dt;
+            if (p.adaptive !== undefined) document.getElementById("adaptive").value = p.adaptive;
+        } catch(e) {}
+    }
+
+    // Save params before submit
+    document.getElementById("simForm").addEventListener("submit", function() {
+        localStorage.setItem("tdgl_simulate_params", JSON.stringify({
+            cpu_cores: parseFloat(document.getElementById("cpu_cores").value),
+            memory_gb: parseFloat(document.getElementById("memory_gb").value),
+            dt: document.getElementById("dt").value,
+            max_dt: document.getElementById("max_dt").value,
+            adaptive: document.getElementById("adaptive").value,
+        }));
+    });
+})();
+</script>
 {% endif %}
 
 {% if runs %}

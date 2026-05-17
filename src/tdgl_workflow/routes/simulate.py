@@ -74,6 +74,9 @@ async def simulate_submit(request: Request):
         "adaptive": form_data.get("adaptive", "true") == "true",
     }
 
+    cpu_cores = float(form_data.get("cpu_cores", "2"))
+    memory_gb = float(form_data.get("memory_gb", "4"))
+
     settings: Settings = request.app.state.settings
 
     # Regenerate mesh and timing from stored params
@@ -156,6 +159,8 @@ async def simulate_submit(request: Request):
                     "parameters": [
                         {"name": "run-id", "value": run_id},
                         {"name": "data-service-url", "value": settings.data_service_url},
+                        {"name": "cpu-cores", "value": str(cpu_cores)},
+                        {"name": "memory-gb", "value": str(memory_gb)},
                     ],
                 },
             },

@@ -227,5 +227,54 @@ document.getElementById("timingForm").addEventListener("submit", function() {
     writeSegmentsToForm();
 });
 </script>
+<script>
+// Load saved timing params from localStorage
+(function() {
+    var saved = localStorage.getItem("tdgl_timing_params");
+    if (saved) {
+        try {
+            var p = JSON.parse(saved);
+            if (p.mode === "segmented" && p.segments && p.segments.length > 0) {
+                document.getElementById("modeSegmented").checked = true;
+                toggleMode();
+                document.getElementById("segmentList").innerHTML = "";
+                segCounter = 0;
+                p.segments.forEach(function(s) {
+                    addSegment(s.je_initial, s.je_final, s.je_step);
+                });
+            } else {
+                if (p.je_initial !== undefined) document.getElementById("je_initial").value = p.je_initial;
+                if (p.je_final !== undefined) document.getElementById("je_final").value = p.je_final;
+                if (p.je_step !== undefined) document.getElementById("je_step").value = p.je_step;
+                if (p.ramp_down) document.getElementById("ramp_down").checked = true;
+            }
+            if (p.ramp_time !== undefined) document.getElementById("ramp_time").value = p.ramp_time;
+            if (p.stable_time !== undefined) document.getElementById("stable_time").value = p.stable_time;
+            if (p.save_time !== undefined) document.getElementById("save_time").value = p.save_time;
+        } catch(e) {}
+    }
+})();
+
+// Save timing params on preview and submit
+var origSubmit = document.getElementById("timingForm").onsubmit;
+document.getElementById("timingForm").addEventListener("submit", function() {
+    var isSeg = document.getElementById("modeSegmented").checked;
+    var params = {
+        mode: isSeg ? "segmented" : "simple",
+        ramp_time: parseFloat(document.getElementById("ramp_time").value),
+        stable_time: parseFloat(document.getElementById("stable_time").value),
+        save_time: parseFloat(document.getElementById("save_time").value),
+    };
+    if (isSeg) {
+        params.segments = getSegments();
+    } else {
+        params.je_initial = parseFloat(document.getElementById("je_initial").value);
+        params.je_final = parseFloat(document.getElementById("je_final").value);
+        params.je_step = parseFloat(document.getElementById("je_step").value);
+        params.ramp_down = document.getElementById("ramp_down").checked;
+    }
+    localStorage.setItem("tdgl_timing_params", JSON.stringify(params));
+});
+</script>
 {% endif %}
 {% endblock %}
