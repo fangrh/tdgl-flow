@@ -39,7 +39,13 @@ verify-argocd:
 	kubectl get pods -n $(NAMESPACE)
 
 gateway:
-	kubectl port-forward -n $(NAMESPACE) svc/gateway 8080:80 --address 0.0.0.0
+	@echo "Gateway is accessible at http://localhost:30080"
+	@echo "Or via WSL IP: http://$(shell hostname -I | awk '{print $$1}'):30080"
+	@echo ""
+	@echo "Services:"
+	@echo "  /tdgl/       → TDGL Data Viewer"
+	@echo "  /argocd/     → ArgoCD Dashboard"
+	@echo "  /workflows/  → Argo Workflows UI"
 
 apply:
 	kubectl apply -k clusters/argocd
