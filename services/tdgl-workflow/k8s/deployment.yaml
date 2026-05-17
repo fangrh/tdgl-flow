@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tdgl-workflow
+  namespace: tdgl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tdgl-workflow
+  template:
+    metadata:
+      labels:
+        app: tdgl-workflow
+    spec:
+      containers:
+        - name: tdgl-workflow
+          image: ghcr.io/fangrh/tdgl-workflow:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: TDGL_WORKFLOW_DATA_SERVICE_URL
+              value: "http://data-viewer.tdgl.svc.cluster.local"
+            - name: TDGL_WORKFLOW_ARGO_SERVER_URL
+              value: "http://argo-workflows-server.argo.svc.cluster.local:2746"
+            - name: TDGL_WORKFLOW_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: tdgl-workflow-config
+                  key: session-secret
+          livenessProbe:
+            httpGet:
+              path: /device
+              port: 8000
+          readinessProbe:
+            httpGet:
+              path: /device
+              port: 8000
