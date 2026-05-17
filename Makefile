@@ -23,7 +23,7 @@ install-argocd:
 	@echo "==> Waiting for ArgoCD repo-server..."
 	kubectl wait --for=condition=Available deploy/argocd-repo-server -n $(ARGOCD_NS) --timeout=180s
 	@echo "==> Waiting for ArgoCD application-controller..."
-	kubectl wait --for=condition=Available deploy/argocd-application-controller -n $(ARGOCD_NS) --timeout=180s
+	kubectl wait --for=condition=Available statefulset/argocd-application-controller -n $(ARGOCD_NS) --timeout=180s
 	@echo "==> Applying ArgoCD Applications..."
 	kubectl apply -k clusters/argocd
 	@echo "==> ArgoCD installed. Get admin password:"
