@@ -4,7 +4,7 @@ ARGOCD_NS   := argocd
 ARGO_VALUES := infra/argo-workflows/helm-values.yaml
 ARGOCD_VALUES := clusters/argocd/helm-values.yaml
 
-.PHONY: install-argo verify-argo port-forward-argo submit-workflow install-argocd verify-argocd port-forward-argocd apply status disable-traefik
+.PHONY: install-argo verify-argo port-forward-argo submit-workflow run-generator install-argocd verify-argocd port-forward-argocd apply status disable-traefik
 
 # Cluster bootstrap
 
@@ -88,3 +88,5 @@ disable-traefik:
 	kubectl -n kube-system delete helmcharts.helm.cattle.io traefik 2>/dev/null || true
 	kubectl -n kube-system delete helmcharts.helm.cattle.io traefo-crd 2>/dev/null || true
 	@echo "==> Traefik disabled. Restart k3s with --disable traefik for persistence."
+run-generator:
+	argo submit -n $(NAMESPACE) --from workflowtemplate/tdgl-generator
