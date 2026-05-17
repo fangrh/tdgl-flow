@@ -25,7 +25,7 @@
         <dt>Film</dt>
         <dd>{{ device_params.get("film_width", "") }} x {{ device_params.get("film_height", "") }}</dd>
         <dt>Mesh</dt>
-        <dd>{{ device_params.get("mesh", {}).get("num_sites", "") }} sites, {{ device_params.get("mesh", {}).get("num_elements", "") }} elements</dd>
+        <dd id="meshDisplay">Loading...</dd>
         <dt>Probes</dt>
         <dd>{{ device_params.get("probe_points", "") }}</dd>
     </dl>
@@ -86,6 +86,9 @@
 <script>
 (function() {
     var clusterRes = null;
+    var numSites = 0;
+    var deviceParams = {{ device_params | tojson }};
+    var timingParams = {{ timing_params | tojson }};
 
     // Fetch cluster resources
     fetch("/workflow/api/cluster/resources")
@@ -103,25 +106,32 @@
             document.getElementById("clusterInfo").textContent = "Cluster: unable to fetch resources";
         });
 
-    // Estimate mesh size from displayed params
-    var numSites = 0;
-    var meshInfo = document.querySelector("dt");
-    if (meshInfo) {
-        var dd = meshInfo.nextElementSibling;
-        if (dd) {
-            var m = dd.textContent.match(/(\d+)\s+sites/);
-            if (m) numSites = parseInt(m[1]);
-        }
-    }
+    // Build mesh on page load to get site count and update display
+    fetch("/workflow/api/preview/mesh", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            film_width: deviceParams.film_width,
+            film_height: deviceParams.film_height,
+            elec_width: deviceParams.elec_width,
+            elec_height: deviceParams.elec_height,
+            elec_y_offset: deviceParams.elec_y_offset,
+            probe_points: deviceParams.probe_points,
+            max_edge_length: deviceParams.max_edge_length,
+            smooth: deviceParams.smooth,
+        }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        numSites = data.num_sites || 0;
+        document.getElementById("meshDisplay").textContent =
+            numSites + " sites, " + (data.num_elements || 0) + " elements";
+    })
+    .catch(function() {
+        document.getElementById("meshDisplay").textContent = "Failed to build mesh";
+    });
 
-    // Recommendation based on mesh size
-    document.getElementById("recommendBtn").addEventListener("click", function() {
-        var sites = numSites;
-        if (!sites || sites < 100) {
-            document.getElementById("recommendInfo").textContent = "No mesh data available. Build device first.";
-            return;
-        }
-
+    function recommend(sites) {
         var recCpu, recMem;
         if (sites <= 500) { recCpu = 1; recMem = 2; }
         else if (sites <= 2000) { recCpu = 2; recMem = 4; }
@@ -130,7 +140,6 @@
         else if (sites <= 30000) { recCpu = 8; recMem = 16; }
         else { recCpu = 10; recMem = 24; }
 
-        // Cap at cluster max
         if (clusterRes) {
             recCpu = Math.min(recCpu, Math.floor(clusterRes.cpu_cores * 0.9));
             recMem = Math.min(recMem, Math.floor(clusterRes.memory_gb * 0.85));
@@ -142,6 +151,48 @@
         document.getElementById("memory_gb").value = recMem;
         document.getElementById("recommendInfo").textContent =
             "Recommended for " + sites + " sites: " + recCpu + " cores, " + recMem + " GB";
+    }
+
+    // Recommendation button
+    document.getElementById("recommendBtn").addEventListener("click", function() {
+        if (numSites >= 100) {
+            recommend(numSites);
+            return;
+        }
+        // Mesh not yet loaded — fetch it
+        var btn = this;
+        btn.disabled = true;
+        document.getElementById("recommendInfo").textContent = "Building mesh...";
+        fetch("/workflow/api/preview/mesh", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                film_width: deviceParams.film_width,
+                film_height: deviceParams.film_height,
+                elec_width: deviceParams.elec_width,
+                elec_height: deviceParams.elec_height,
+                elec_y_offset: deviceParams.elec_y_offset,
+                probe_points: deviceParams.probe_points,
+                max_edge_length: deviceParams.max_edge_length,
+                smooth: deviceParams.smooth,
+            }),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            numSites = data.num_sites || 0;
+            document.getElementById("meshDisplay").textContent =
+                numSites + " sites, " + (data.num_elements || 0) + " elements";
+            if (numSites >= 100) {
+                recommend(numSites);
+            } else {
+                document.getElementById("recommendInfo").textContent =
+                    "Mesh too small (" + numSites + " sites) for recommendation.";
+            }
+        })
+        .catch(function(err) {
+            document.getElementById("recommendInfo").textContent = "Error building mesh: " + err.message;
+        })
+        .finally(function() { btn.disabled = false; });
     });
 
     // Load saved resource params
