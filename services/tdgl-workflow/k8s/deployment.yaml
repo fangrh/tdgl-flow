@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: tdgl-workflow
-          image: ghcr.io/fangrh/tdgl-workflow:0d9128b
+          image: ghcr.io/fangrh/tdgl-workflow:55e88a7
           ports:
             - containerPort: 8000
           env:
