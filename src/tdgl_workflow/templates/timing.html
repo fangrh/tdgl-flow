@@ -6,21 +6,49 @@
 <p style="color:#dc2626;">Please <a href="/device">configure a device</a> first.</p>
 {% else %}
 <form id="timingForm" method="post">
-    <div class="field-row">
-        <div>
-            <label>Je Initial</label>
-            <input type="number" step="any" name="je_initial" id="je_initial" value="{{ form.get('je_initial', '0') }}">
+    <div style="margin-bottom:1rem;">
+        <label style="display:inline;font-weight:500;margin-right:1rem;">Mode:</label>
+        <label style="display:inline;font-weight:normal;margin-right:1rem;">
+            <input type="radio" name="mode" id="modeSimple" value="simple" checked onchange="toggleMode()"> Simple
+        </label>
+        <label style="display:inline;font-weight:normal;">
+            <input type="radio" name="mode" id="modeSegmented" value="segmented" onchange="toggleMode()"> Segmented
+        </label>
+    </div>
+
+    <!-- Simple mode -->
+    <div id="simpleMode">
+        <div class="field-row">
+            <div>
+                <label>Je Initial</label>
+                <input type="number" step="any" name="je_initial" id="je_initial" value="{{ form.get('je_initial', '0') }}">
+            </div>
+            <div>
+                <label>Je Final</label>
+                <input type="number" step="any" name="je_final" id="je_final" value="{{ form.get('je_final', '5') }}">
+            </div>
+            <div>
+                <label>Je Step</label>
+                <input type="number" step="any" name="je_step" id="je_step" value="{{ form.get('je_step', '1') }}">
+            </div>
         </div>
-        <div>
-            <label>Je Final</label>
-            <input type="number" step="any" name="je_final" id="je_final" value="{{ form.get('je_final', '5') }}">
-        </div>
-        <div>
-            <label>Je Step</label>
-            <input type="number" step="any" name="je_step" id="je_step" value="{{ form.get('je_step', '1') }}">
+        <div style="margin-bottom:1rem;">
+            <label style="display:inline;font-weight:normal;">
+                <input type="checkbox" name="ramp_down" id="ramp_down" {% if form.get('ramp_down') %}checked{% endif %}>
+                Include ramp-down
+            </label>
         </div>
     </div>
-    <div class="field-row">
+
+    <!-- Segmented mode -->
+    <div id="segmentedMode" style="display:none;">
+        <p style="font-size:0.85rem;color:#64748b;margin-bottom:0.5rem;">Define multiple sweep segments. Each segment has its own Je range and step. Segments are executed in order.</p>
+        <div id="segmentList"></div>
+        <button type="button" onclick="addSegment()" style="background:#64748b;font-size:0.85rem;padding:0.3rem 0.8rem;">+ Add Segment</button>
+    </div>
+
+    <!-- Common params -->
+    <div class="field-row" style="margin-top:1rem;">
         <div>
             <label>Ramp Time</label>
             <input type="number" step="any" name="ramp_time" id="ramp_time" value="{{ form.get('ramp_time', '0.5') }}">
@@ -34,12 +62,8 @@
             <input type="number" step="any" name="save_time" id="save_time" value="{{ form.get('save_time', '1') }}">
         </div>
     </div>
-    <div style="margin-bottom:1rem;">
-        <label style="display:inline;font-weight:normal;">
-            <input type="checkbox" name="ramp_down" id="ramp_down" {% if form.get('ramp_down') %}checked{% endif %}>
-            Include ramp-down
-        </label>
-    </div>
+    <input type="hidden" name="segments_json" id="segments_json">
+
     <button type="button" id="previewBtn">Preview Timing</button>
     <button type="submit" name="action" value="next" class="secondary">Next: Simulate</button>
     <span id="status" style="margin-left:1rem;color:#64748b;font-size:0.9rem;"></span>
@@ -49,21 +73,78 @@
     <div id="plotDiv"></div>
 </div>
 <script>
+function toggleMode() {
+    document.getElementById("simpleMode").style.display =
+        document.getElementById("modeSimple").checked ? "block" : "none";
+    document.getElementById("segmentedMode").style.display =
+        document.getElementById("modeSegmented").checked ? "block" : "none";
+}
+
+var segCounter = 0;
+function addSegment(initial, final, step) {
+    var idx = segCounter++;
+    var div = document.createElement("div");
+    div.className = "field-row";
+    div.id = "seg_" + idx;
+    div.style.cssText = "background:#f8f9fa;padding:0.75rem;border-radius:6px;margin-bottom:0.5rem;align-items:end;";
+    div.innerHTML =
+        '<div><label>Je Initial</label><input type="number" step="any" class="seg-init" value="' + (initial || 0) + '"></div>' +
+        '<div><label>Je Final</label><input type="number" step="any" class="seg-final" value="' + (final || 5) + '"></div>' +
+        '<div><label>Je Step</label><input type="number" step="any" class="seg-step" value="' + (step || 1) + '"></div>' +
+        '<div style="padding-bottom:0.5rem;"><button type="button" onclick="this.closest(\'.field-row\').remove()" style="background:#dc2626;font-size:0.8rem;padding:0.3rem 0.6rem;">Remove</button></div>';
+    document.getElementById("segmentList").appendChild(div);
+}
+
+function getSegments() {
+    var segs = [];
+    document.querySelectorAll("#segmentList > .field-row").forEach(function(row) {
+        segs.push({
+            je_initial: parseFloat(row.querySelector(".seg-init").value),
+            je_final: parseFloat(row.querySelector(".seg-final").value),
+            je_step: parseFloat(row.querySelector(".seg-step").value),
+        });
+    });
+    return segs;
+}
+
+function writeSegmentsToForm() {
+    if (document.getElementById("modeSegmented").checked) {
+        document.getElementById("segments_json").value = JSON.stringify(getSegments());
+    }
+}
+
+// Init with one default segment
+addSegment(0, 5, 1);
+
 document.getElementById("previewBtn").addEventListener("click", async function() {
     var btn = this;
     var status = document.getElementById("status");
     btn.disabled = true;
     status.textContent = "Building schedule...";
 
-    var body = {
-        je_initial: parseFloat(document.getElementById("je_initial").value),
-        je_final: parseFloat(document.getElementById("je_final").value),
-        je_step: parseFloat(document.getElementById("je_step").value),
-        ramp_time: parseFloat(document.getElementById("ramp_time").value),
-        stable_time: parseFloat(document.getElementById("stable_time").value),
-        save_time: parseFloat(document.getElementById("save_time").value),
-        ramp_down: document.getElementById("ramp_down").checked
-    };
+    var isSegmented = document.getElementById("modeSegmented").checked;
+    var body;
+
+    if (isSegmented) {
+        body = {
+            mode: "segmented",
+            segments: getSegments(),
+            ramp_time: parseFloat(document.getElementById("ramp_time").value),
+            stable_time: parseFloat(document.getElementById("stable_time").value),
+            save_time: parseFloat(document.getElementById("save_time").value),
+        };
+    } else {
+        body = {
+            mode: "simple",
+            je_initial: parseFloat(document.getElementById("je_initial").value),
+            je_final: parseFloat(document.getElementById("je_final").value),
+            je_step: parseFloat(document.getElementById("je_step").value),
+            ramp_time: parseFloat(document.getElementById("ramp_time").value),
+            stable_time: parseFloat(document.getElementById("stable_time").value),
+            save_time: parseFloat(document.getElementById("save_time").value),
+            ramp_down: document.getElementById("ramp_down").checked,
+        };
+    }
 
     try {
         var resp = await fetch("/workflow/api/preview/timing", {
@@ -71,13 +152,17 @@ document.getElementById("previewBtn").addEventListener("click", async function()
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify(body)
         });
-        if (!resp.ok) throw new Error("Server error: " + resp.status);
+        if (!resp.ok) {
+            var errText = await resp.text();
+            throw new Error("HTTP " + resp.status + ": " + errText);
+        }
         var data = await resp.json();
 
         var xData = [];
         var yData = [];
         var shapes = [];
 
+        // All steps (up + ramp-down or segmented) are in data.steps
         data.steps.forEach(function(step) {
             xData.push(step.ramp_start, step.ramp_end, null);
             yData.push(step.je_start, step.je_end, null);
@@ -92,10 +177,20 @@ document.getElementById("previewBtn").addEventListener("click", async function()
             });
         });
 
+        // Ramp-down steps (same structure as up steps)
         if (data.ramp_down_steps) {
             data.ramp_down_steps.forEach(function(step) {
                 xData.push(step.ramp_start, step.ramp_end, null);
                 yData.push(step.je_start, step.je_end, null);
+                xData.push(step.ramp_end, step.stable_end, null);
+                yData.push(step.je_end, step.je_end, null);
+                shapes.push({
+                    type: "rect",
+                    x0: step.save_start, y0: 0,
+                    x1: step.save_end, y1: step.je_end * 1.05,
+                    fillcolor: "rgba(239,68,68,0.08)",
+                    line: {width: 0}
+                });
             });
         }
 
@@ -125,6 +220,11 @@ document.getElementById("previewBtn").addEventListener("click", async function()
         status.textContent = "Error: " + err.message;
     }
     btn.disabled = false;
+});
+
+// Write segments to hidden field before form submit
+document.getElementById("timingForm").addEventListener("submit", function() {
+    writeSegmentsToForm();
 });
 </script>
 {% endif %}

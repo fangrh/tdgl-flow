@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
@@ -40,15 +41,31 @@ async def timing_preview(request: Request):
     if not has_device:
         return RedirectResponse("/device", status_code=303)
 
-    params = {
-        "je_initial": float(form.get("je_initial", 0)),
-        "je_final": float(form.get("je_final", 5)),
-        "je_step": float(form.get("je_step", 1)),
-        "ramp_time": float(form.get("ramp_time", 0.5)),
-        "stable_time": float(form.get("stable_time", 2)),
-        "save_time": float(form.get("save_time", 1)),
-        "ramp_down": "ramp_down" in form,
-    }
+    ramp_time = float(form.get("ramp_time", 0.5))
+    stable_time = float(form.get("stable_time", 2))
+    save_time = float(form.get("save_time", 1))
+
+    segments_json = form.get("segments_json", "")
+    if segments_json:
+        segments = json.loads(segments_json)
+        params = {
+            "mode": "segmented",
+            "segments": segments,
+            "ramp_time": ramp_time,
+            "stable_time": stable_time,
+            "save_time": save_time,
+        }
+    else:
+        params = {
+            "mode": "simple",
+            "je_initial": float(form.get("je_initial", 0)),
+            "je_final": float(form.get("je_final", 5)),
+            "je_step": float(form.get("je_step", 1)),
+            "ramp_time": ramp_time,
+            "stable_time": stable_time,
+            "save_time": save_time,
+            "ramp_down": "ramp_down" in form,
+        }
 
     request.session["timing_params"] = params
 

@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 
 from tdgl_workflow.config import Settings
 from tdgl_workflow.mesh import build_rectangular_device
-from tdgl_workflow.timing import build_timing
+from tdgl_workflow.timing import build_timing, build_timing_segmented
 
 router = APIRouter()
 
@@ -88,7 +88,23 @@ async def simulate_submit(request: Request):
         smooth=device_params["smooth"],
     )
 
-    timing_data = build_timing(**timing_params)
+    if timing_params.get("mode") == "segmented":
+        timing_data = build_timing_segmented(
+            segments=timing_params["segments"],
+            ramp_time=timing_params["ramp_time"],
+            stable_time=timing_params["stable_time"],
+            save_time=timing_params["save_time"],
+        )
+    else:
+        timing_data = build_timing(
+            je_initial=timing_params["je_initial"],
+            je_final=timing_params["je_final"],
+            je_step=timing_params["je_step"],
+            ramp_time=timing_params["ramp_time"],
+            stable_time=timing_params["stable_time"],
+            save_time=timing_params["save_time"],
+            ramp_down=timing_params.get("ramp_down", False),
+        )
 
     num_sites = mesh_data["num_sites"]
 
