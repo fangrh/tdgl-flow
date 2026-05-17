@@ -31,12 +31,13 @@
         .field-row > div { flex: 1; min-width: 200px; }
     </style>
     <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+    <script>var basePath = "{{ base_path }}";</script>
 </head>
 <body>
     <nav>
-        <a href="/device" {% if page == 'device' %}class="active"{% endif %}>Device</a>
-        <a href="/timing" {% if page == 'timing' %}class="active"{% endif %}>Timing</a>
-        <a href="/simulate" {% if page == 'simulate' %}class="active"{% endif %}>Simulate</a>
+        <a href="{{ base_path }}/device" {% if page == 'device' %}class="active"{% endif %}>Device</a>
+        <a href="{{ base_path }}/timing" {% if page == 'timing' %}class="active"{% endif %}>Timing</a>
+        <a href="{{ base_path }}/simulate" {% if page == 'simulate' %}class="active"{% endif %}>Simulate</a>
     </nav>
     <main>
         {% block content %}{% endblock %}

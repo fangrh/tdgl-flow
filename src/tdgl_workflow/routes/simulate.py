@@ -12,11 +12,14 @@ from tdgl_workflow.timing import build_timing, build_timing_segmented
 
 router = APIRouter()
 
+_settings = Settings()
+
 _env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent.parent / "templates")),
     autoescape=True,
     cache_size=0,
 )
+_env.globals["base_path"] = _settings.base_path
 
 
 def _render_template(template_name: str, context: dict):

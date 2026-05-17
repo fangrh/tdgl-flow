@@ -23,6 +23,8 @@ spec:
               value: "http://data-viewer.tdgl.svc.cluster.local"
             - name: TDGL_WORKFLOW_ARGO_SERVER_URL
               value: "http://argo-workflows-server.argo.svc.cluster.local:2746"
+            - name: TDGL_WORKFLOW_BASE_PATH
+              value: "/workflow"
             - name: TDGL_WORKFLOW_SESSION_SECRET
               valueFrom:
                 secretKeyRef:

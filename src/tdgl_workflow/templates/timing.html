@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Timing Builder</h1>
 {% if not has_device %}
-<p style="color:#dc2626;">Please <a href="/device">configure a device</a> first.</p>
+<p style="color:#dc2626;">Please <a href="{{ base_path }}/device">configure a device</a> first.</p>
 {% else %}
 <form id="timingForm" method="post">
     <div style="margin-bottom:1rem;">
@@ -147,7 +147,7 @@ document.getElementById("previewBtn").addEventListener("click", async function()
     }
 
     try {
-        var resp = await fetch("/workflow/api/preview/timing", {
+        var resp = await fetch(basePath + "/api/preview/timing", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify(body)

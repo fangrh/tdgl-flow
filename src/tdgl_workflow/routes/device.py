@@ -5,14 +5,18 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from tdgl_workflow.mesh import build_rectangular_device
+from tdgl_workflow.config import Settings
 
 router = APIRouter()
+
+_settings = Settings()
 
 _env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent.parent / "templates")),
     autoescape=True,
     cache_size=0,
 )
+_env.globals["base_path"] = _settings.base_path
 
 
 def _render_template(template_name: str, context: dict):
@@ -66,7 +70,7 @@ async def device_preview(request: Request):
     }
 
     if action == "next":
-        return RedirectResponse("/timing", status_code=303)
+        return RedirectResponse(_settings.base_path + "/timing", status_code=303)
 
     return _render_template("device.html", {
         "request": request,

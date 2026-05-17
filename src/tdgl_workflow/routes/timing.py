@@ -5,13 +5,18 @@ from jinja2 import Environment, FileSystemLoader
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from tdgl_workflow.config import Settings
+
 router = APIRouter()
+
+_settings = Settings()
 
 _env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent.parent / "templates")),
     autoescape=True,
     cache_size=0,
 )
+_env.globals["base_path"] = _settings.base_path
 
 
 def _render_template(template_name: str, context: dict):
@@ -39,7 +44,7 @@ async def timing_preview(request: Request):
 
     has_device = "device_params" in request.session
     if not has_device:
-        return RedirectResponse("/device", status_code=303)
+        return RedirectResponse(_settings.base_path + "/device", status_code=303)
 
     ramp_time = float(form.get("ramp_time", 0.5))
     stable_time = float(form.get("stable_time", 2))
@@ -70,7 +75,7 @@ async def timing_preview(request: Request):
     request.session["timing_params"] = params
 
     if action == "next":
-        return RedirectResponse("/simulate", status_code=303)
+        return RedirectResponse(_settings.base_path + "/simulate", status_code=303)
 
     return _render_template("timing.html", {
         "request": request,

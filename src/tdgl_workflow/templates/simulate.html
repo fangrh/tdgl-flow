@@ -6,10 +6,10 @@
 {% if not has_device or not has_timing %}
 <div class="summary">
     {% if not has_device %}
-    <p>Configure a <a href="/device">device</a> first.</p>
+    <p>Configure a <a href="{{ base_path }}/device">device</a> first.</p>
     {% endif %}
     {% if not has_timing %}
-    <p>Configure a <a href="/timing">timing sequence</a> first.</p>
+    <p>Configure a <a href="{{ base_path }}/timing">timing sequence</a> first.</p>
     {% endif %}
 </div>
 {% elif submitted %}
@@ -91,7 +91,7 @@
     var timingParams = {{ timing_params | tojson }};
 
     // Fetch cluster resources
-    fetch("/workflow/api/cluster/resources")
+    fetch(basePath + "/api/cluster/resources")
         .then(function(r) { return r.json(); })
         .then(function(data) {
             clusterRes = data;
@@ -107,7 +107,7 @@
         });
 
     // Build mesh on page load to get site count and update display
-    fetch("/workflow/api/preview/mesh", {
+    fetch(basePath + "/api/preview/mesh", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -163,7 +163,7 @@
         var btn = this;
         btn.disabled = true;
         document.getElementById("recommendInfo").textContent = "Building mesh...";
-        fetch("/workflow/api/preview/mesh", {
+        fetch(basePath + "/api/preview/mesh", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
