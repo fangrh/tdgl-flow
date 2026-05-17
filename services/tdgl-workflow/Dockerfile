@@ -1,3 +1,4 @@
+# TDGL Workflow web application
 FROM python:3.13-slim
 
 WORKDIR /app
