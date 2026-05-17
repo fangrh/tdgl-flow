@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: cpp-tdgl-sim
+  namespace: tdgl
+spec:
+  arguments:
+    parameters:
+      - name: run-id
+        value: ""
+      - name: data-service-url
+        value: "http://data-viewer.tdgl.svc.cluster.local"
+      - name: image
+        value: "ghcr.io/fangrh/cpp-tdgl-runner:latest"
+  entrypoint: simulate
+  templates:
+    - name: simulate
+      container:
+        image: "{{workflow.parameters.image}}"
+        command: [python, /app/runner.py]
+        env:
+          - name: TDGL_RUN_ID
+            value: "{{workflow.parameters.run-id}}"
+          - name: TDGL_DATA_SERVICE_URL
+            value: "{{workflow.parameters.data-service-url}}"
