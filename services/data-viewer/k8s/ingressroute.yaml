@@ -1,0 +1,14 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: data-viewer
+  namespace: tdgl
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`tdgl.local`)
+      kind: Rule
+      services:
+        - name: data-viewer
+          port: 80
