@@ -114,7 +114,7 @@ jobs:
             echo "Updated tdgl-workflow tag to $SHA"
           fi
           if [ "${{ steps.changes.outputs.build_runner }}" = "true" ]; then
-            sed -i "s|image: ghcr.io/fangrh/cpp-tdgl-runner:.*|image: ghcr.io/fangrh/cpp-tdgl-runner:$SHA|" workflows/cpp-tdgl-sim.yaml
+            sed -i "s|ghcr.io/fangrh/cpp-tdgl-runner:.*|ghcr.io/fangrh/cpp-tdgl-runner:$SHA|g" workflows/cpp-tdgl-sim.yaml
             echo "Updated cpp-tdgl-runner tag to $SHA"
           fi
           git add services/data-viewer/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml workflows/cpp-tdgl-sim.yaml

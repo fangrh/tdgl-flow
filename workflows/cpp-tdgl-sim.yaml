@@ -11,7 +11,7 @@ spec:
       - name: data-service-url
         value: "http://data-viewer.tdgl.svc.cluster.local"
       - name: image
-        value: "ghcr.io/fangrh/cpp-tdgl-runner:latest"
+        value: "ghcr.io/fangrh/cpp-tdgl-runner:406037b"
       - name: cpu-cores
         value: "2"
       - name: memory-gb
