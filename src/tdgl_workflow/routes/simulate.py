@@ -174,8 +174,8 @@ async def simulate_submit(request: Request):
                     "parameters": [
                         {"name": "run-id", "value": run_id},
                         {"name": "data-service-url", "value": settings.data_service_url},
-                        {"name": "device-params-json", "value": _json.dumps(full_device_params)},
-                        {"name": "timing-params-json", "value": _json.dumps(full_timing_params)},
+                        {"name": "device-params-json", "value": _json.dumps(device_params)},
+                        {"name": "timing-params-json", "value": _json.dumps(timing_params)},
                         {"name": "solver-options-json", "value": _json.dumps(solver_options)},
                         {"name": "cpu", "value": str(cpu_cores)},
                         {"name": "memory", "value": f"{memory_gb}Gi"},
