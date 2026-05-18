@@ -1,7 +1,11 @@
+import json as _json
+import uuid as _uuid
+
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from tdgl_workflow.config import Settings
 from tdgl_workflow.mesh import build_rectangular_device
 from tdgl_workflow.timing import build_timing, build_timing_segmented
 
@@ -99,3 +103,91 @@ async def cluster_resources():
         })
     except Exception as e:
         return JSONResponse({"cpu_cores": 12, "memory_gb": 31, "nodes": 1, "error": str(e)})
+
+
+@router.post("/device/build")
+async def device_build(request: Request):
+    return await preview_mesh(request)
+
+
+@router.post("/timing/build")
+async def timing_build(request: Request):
+    return await preview_timing(request)
+
+
+@router.post("/workflows/submit")
+async def submit_workflow(request: Request):
+    body = await request.json()
+    settings: Settings = request.app.state.settings
+
+    device_params = body.get("device_params", {})
+    timing_params = body.get("timing_params", {})
+    mesh_data = body.get("mesh_data", {})
+    schedule = body.get("schedule", {})
+    solver_options = body.get("solver_options", {})
+    resources = body.get("resources", {"cpu_cores": 2, "memory_mib": 2048})
+
+    n_sites = mesh_data.get("num_sites", len(mesh_data.get("sites", [])))
+    mesh_sites = mesh_data.get("sites")
+    mesh_elements = mesh_data.get("elements")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        create_resp = await client.post(
+            f"{settings.data_service_url}/api/runs",
+            json={
+                "solver_type": "cpp-tdgl",
+                "n_sites": n_sites,
+                "device_params": device_params,
+                "timing_params": timing_params,
+                "mesh_sites": mesh_sites,
+                "mesh_elements": mesh_elements,
+                "solver_options": solver_options,
+                "total_frames": schedule.get("n_steps", 0),
+            },
+        )
+        create_resp.raise_for_status()
+        created_run = create_resp.json()
+        actual_run_id = created_run["run_id"]
+
+    workflow = {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Workflow",
+        "metadata": {
+            "generateName": f"cpp-tdgl-{actual_run_id[:8]}-",
+            "namespace": settings.tdgl_namespace,
+            "labels": {"run-id": actual_run_id},
+        },
+        "spec": {
+            "workflowTemplateRef": {"name": "cpp-tdgl-sim"},
+            "arguments": {
+                "parameters": [
+                    {"name": "run-id", "value": actual_run_id},
+                    {"name": "data-service-url", "value": settings.data_service_url},
+                    {"name": "device-params-json", "value": _json.dumps(device_params)},
+                    {"name": "timing-params-json", "value": _json.dumps(timing_params)},
+                    {"name": "solver-options-json", "value": _json.dumps(solver_options)},
+                    {"name": "cpu", "value": str(resources.get("cpu_cores", 2))},
+                    {"name": "memory", "value": f"{resources.get('memory_gb', resources.get('memory_mib', 2048) / 1024)}Gi"},
+                ],
+            },
+        },
+    }
+
+    workflow_name = None
+    try:
+        async with httpx.AsyncClient(timeout=15.0, verify=False) as argo_client:
+            argo_resp = await argo_client.post(
+                f"{settings.argo_server_url}/api/v1/workflows/{settings.tdgl_namespace}",
+                json={"workflow": workflow},
+                headers={"Content-Type": "application/json"},
+            )
+            if argo_resp.status_code < 300:
+                workflow_name = argo_resp.json()["metadata"]["name"]
+    except httpx.HTTPError:
+        pass
+
+    return JSONResponse({
+        "run_id": actual_run_id,
+        "workflow_name": workflow_name,
+        "status": "created",
+    })
