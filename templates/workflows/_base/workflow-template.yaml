@@ -1,0 +1,56 @@
+# Base WorkflowTemplate — adapt for your workflow.
+# See templates/workflows/_patterns/ for common patterns.
+#
+# Rules:
+#   - Always set activeDeadlineSeconds
+#   - Always declare resources.requests AND resources.limits
+#   - Always accept run-id as parameter
+#   - Output goes to mounted PVC (/data)
+#   - Use {{workflow.parameters.xxx}} for parameter substitution
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: my-workflow
+  namespace: tdgl
+spec:
+  entrypoint: main
+  activeDeadlineSeconds: 3600
+  arguments:
+    parameters:
+      - name: run-id
+        value: ""
+      - name: image
+        value: "ghcr.io/fangrh/tdgl-my-service:latest"
+      - name: cpu
+        value: "1"
+      - name: memory
+        value: "2Gi"
+  templates:
+    - name: main
+      container:
+        image: "{{workflow.parameters.image}}"
+        command: [python, /app/runner.py]
+        env:
+          - name: RUN_ID
+            value: "{{workflow.parameters.run-id}}"
+          - name: DATA_DIR
+            value: "/data"
+        resources:
+          requests:
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
+          limits:
+            cpu: "{{workflow.parameters.cpu}}"
+            memory: "{{workflow.parameters.memory}}"
+        volumeMounts:
+          - name: run-data
+            mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: run-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+```
