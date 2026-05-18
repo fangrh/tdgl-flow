@@ -142,6 +142,13 @@ kubectl logs -f deployment/<name> -n tdgl
 ### Argo CD during dev
 Set Argo CD to manual sync or pause auto-sync to prevent overwriting dev changes.
 
+### After dev testing succeeds
+When service changes are verified and working, remind the user:
+> "Dev testing passed. Ready to re-enable Argo CD auto-sync? Run:
+> `argocd app set tdgl-services --sync-policy automated`"
+
+Do not re-enable auto-sync without user confirmation.
+
 ## Prod Mode
 ```
 PR → CI builds changed images → merge to main → CI updates manifest tags → Argo CD auto-sync
