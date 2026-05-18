@@ -56,7 +56,7 @@
     .metric span { display: block; color: #667381; font-size: 12px; margin-bottom: 4px; }
     .metric strong { font-size: 16px; font-weight: 650; }
     .plots { display: grid; gap: 16px; }
-    .plots-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(340px, 1fr); }
+    .plots-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     .panel { min-width: 0; }
     .panel h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
     .plotly-div { width: 100%; min-height: 420px; }
@@ -105,8 +105,12 @@
     </section>
     <section class="plots plots-row" aria-label="Plots">
       <div class="panel">
-        <h2>|psi|</h2>
+        <h2>|psi|^2</h2>
         <div id="psiPlot" class="plotly-div"></div>
+      </div>
+      <div class="panel">
+        <h2>Phase</h2>
+        <div id="phasePlot" class="plotly-div"></div>
       </div>
       <div class="panel">
         <h2>mu</h2>
@@ -137,6 +141,7 @@
       timer: null,
       frameBuffer: new Map(),
       eventSource: null,
+      mesh: null,
     };
     const els = {
       runList: document.getElementById("runList"),
@@ -190,6 +195,62 @@
       return arrays.psi_real.map((row, y) => row.map((real, x) => Math.hypot(real, arrays.psi_imag[y][x])));
     }
 
+    async function loadMesh(runId) {
+      if (state.mesh) return;
+      try {
+        state.mesh = await requestJson(`api/runs/${runId}/mesh`);
+      } catch (_e) {
+        state.mesh = null;
+      }
+    }
+
+    function interpolateToGrid(sites, values, nx, ny) {
+      const xs = sites.map(s => s[0]);
+      const ys = sites.map(s => s[1]);
+      const xMin = Math.min(...xs), xMax = Math.max(...xs);
+      const yMin = Math.min(...ys), yMax = Math.max(...ys);
+
+      const grid = [];
+      for (let y = 0; y < ny; y++) grid[y] = new Array(nx).fill(NaN);
+
+      const cellW = (xMax - xMin) / nx;
+      const cellH = (yMax - yMin) / ny;
+
+      for (let i = 0; i < sites.length; i++) {
+        const gx = Math.min(nx - 1, Math.max(0, Math.floor((sites[i][0] - xMin) / cellW)));
+        const gy = Math.min(ny - 1, Math.max(0, Math.floor((sites[i][1] - yMin) / cellH)));
+        grid[gy][gx] = values[i];
+      }
+
+      for (let y = 0; y < ny; y++) {
+        for (let x = 0; x < nx; x++) {
+          if (isNaN(grid[y][x])) {
+            let minDist = Infinity, nearest = 0;
+            for (let i = 0; i < sites.length; i++) {
+              const sx = Math.min(nx - 1, Math.max(0, Math.floor((sites[i][0] - xMin) / cellW)));
+              const sy = Math.min(ny - 1, Math.max(0, Math.floor((sites[i][1] - yMin) / cellH)));
+              const d = Math.abs(sx - x) + Math.abs(sy - y);
+              if (d < minDist) { minDist = d; nearest = i; }
+            }
+            grid[y][x] = values[nearest];
+          }
+        }
+      }
+
+      const xg = [], yg = [];
+      for (let i = 0; i < nx; i++) xg.push(xMin + (i + 0.5) * cellW);
+      for (let i = 0; i < ny; i++) yg.push(yMin + (i + 0.5) * cellH);
+      return { grid, xg, yg };
+    }
+
+    function psiMagnitude1D(psiReal, psiImag) {
+      return psiReal.map((r, i) => Math.hypot(r, psiImag[i]));
+    }
+
+    function psiPhase1D(psiReal, psiImag) {
+      return psiReal.map((r, i) => Math.atan2(psiImag[i], r));
+    }
+
     function renderPsiHeatmap(data, bounds) {
       const trace = {
         z: data,
@@ -214,6 +275,19 @@
         colorbar: {title: "mu", thickness: 15},
       };
       Plotly.react("muPlot", [trace], HEATMAP_LAYOUT, HEATMAP_CONFIG);
+    }
+
+    function renderPhaseHeatmap(data) {
+      const trace = {
+        z: data,
+        type: "heatmap",
+        colorscale: "Twilight",
+        zmin: -Math.PI,
+        zmax: Math.PI,
+        showscale: true,
+        colorbar: {title: "Phase", thickness: 15},
+      };
+      Plotly.react("phasePlot", [trace], HEATMAP_LAYOUT, HEATMAP_CONFIG);
     }
 
     function renderIvCurve(ivData, currentFrameIndex) {
@@ -258,6 +332,19 @@
           if (v < min) min = v;
           if (v > max) max = v;
         }
+      }
+      if (!current) return {min, max};
+      return {
+        min: Math.min(current.min, min),
+        max: Math.max(current.max, max),
+      };
+    }
+
+    function adaptivePsiBounds1D(current, psqValues) {
+      let min = Infinity, max = -Infinity;
+      for (const v of psqValues) {
+        if (v < min) min = v;
+        if (v > max) max = v;
       }
       if (!current) return {min, max};
       return {
@@ -426,6 +513,7 @@
         state.psiBounds = null;
         setControlsEnabled(false);
         Plotly.purge("psiPlot");
+        Plotly.purge("phasePlot");
         Plotly.purge("muPlot");
         Plotly.purge("ivPlot");
         updateFramePositionLabel();
@@ -435,6 +523,7 @@
 
     async function loadTimeline(runId) {
       setControlsEnabled(false);
+      await loadMesh(runId);
       state.run = state.runs.find(r => r.run_id === runId) || state.run;
       const [timeline, iv] = await Promise.all([
         requestJson(`api/runs/${runId}/timeline`),
@@ -451,6 +540,7 @@
         closeEventSource();
         setControlsEnabled(false);
         Plotly.purge("psiPlot");
+        Plotly.purge("phasePlot");
         Plotly.purge("muPlot");
         Plotly.purge("ivPlot");
         state.psiBounds = null;
@@ -495,11 +585,31 @@
       updateFramePositionLabel(targetFrameIndex);
       const frame = state.frameBuffer.get(targetFrameIndex) || await requestJson(`api/runs/${state.runId}/frames/${metadata.frame_index}`);
       state.frameBuffer.set(targetFrameIndex, frame);
-      const psiData = psiMagnitude(frame.arrays);
-      state.psiBounds = adaptivePsiBounds(state.psiBounds, frame.arrays);
-      renderPsiHeatmap(psiData, state.psiBounds);
-      const muBounds = state.timeline.stats.mu || null;
-      renderMuHeatmap(frame.arrays.mu, muBounds);
+      const psiReal = frame.arrays.psi_real;
+      const psiImag = frame.arrays.psi_imag;
+      const mu = frame.arrays.mu;
+
+      if (state.mesh && Array.isArray(psiReal) && typeof psiReal[0] === "number") {
+        // Per-site data — interpolate to grid
+        const psq = psiMagnitude1D(psiReal, psiImag);
+        const phase = psiPhase1D(psiReal, psiImag);
+        const nx = 80, ny = 54;
+        const psqGrid = interpolateToGrid(state.mesh.sites, psq, nx, ny);
+        const phaseGrid = interpolateToGrid(state.mesh.sites, phase, nx, ny);
+        const muGrid = interpolateToGrid(state.mesh.sites, mu, nx, ny);
+
+        state.psiBounds = adaptivePsiBounds1D(state.psiBounds, psq);
+        renderPsiHeatmap(psqGrid.grid, state.psiBounds);
+        renderPhaseHeatmap(phaseGrid.grid);
+        renderMuHeatmap(muGrid.grid, state.timeline?.stats?.mu || null);
+      } else if (Array.isArray(psiReal) && Array.isArray(psiReal[0])) {
+        // Legacy 2D grid data (backward compat)
+        const psiData = psiMagnitude(frame.arrays);
+        state.psiBounds = adaptivePsiBounds(state.psiBounds, frame.arrays);
+        renderPsiHeatmap(psiData, state.psiBounds);
+        renderPhaseHeatmap([]);
+        renderMuHeatmap(frame.arrays.mu, state.timeline?.stats?.mu || null);
+      }
       renderIvCurve(state.iv, frame.frame_index);
       els.frameValue.textContent = String(frame.frame_index);
       els.timeValue.textContent = formatNumber(frame.time_value);
