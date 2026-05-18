@@ -34,6 +34,24 @@
         .status-completed { background: #dcfce7; color: #166534; }
         .status-failed { background: #fee2e2; color: #991b1b; }
         .status-created { background: #f1f5f9; color: #475569; }
+        .viewer-container { display: flex; gap: 1rem; margin-top: 1rem; }
+        .viewer-sidebar { flex: 0 0 320px; }
+        .viewer-main { flex: 1; min-width: 0; }
+        .viewer-frame-wrapper { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; position: relative; }
+        .viewer-frame-wrapper iframe { width: 100%; height: 500px; border: none; display: block; }
+        .viewer-status { padding: 0.5rem 1rem; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; background: #f1f5f9; }
+        .viewer-status .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .viewer-status .dot.starting { background: #f59e0b; animation: pulse 1.5s infinite; }
+        .viewer-status .dot.ready { background: #22c55e; }
+        .viewer-status .dot.failed { background: #ef4444; }
+        .viewer-status .dot.idle { background: #94a3b8; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .viewer-error { padding: 2rem; text-align: center; color: #991b1b; }
+        .viewer-loading { padding: 2rem; text-align: center; color: #64748b; }
+        .btn-view { background: #059669; font-size: 0.8rem; padding: 0.3rem 0.8rem; }
+        .btn-view:hover { background: #047857; }
+        .btn-view:disabled { background: #94a3b8; cursor: not-allowed; }
+        .btn-close-viewer { background: #64748b; font-size: 0.8rem; padding: 0.3rem 0.8rem; margin-left: 0.5rem; }
     </style>
     <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
     <script>var basePath = "{{ base_path }}";</script>
