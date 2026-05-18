@@ -29,6 +29,11 @@
         th { background: #f1f5f9; font-weight: 600; font-size: 0.85rem; color: #475569; }
         .field-row { display: flex; gap: 1rem; flex-wrap: wrap; }
         .field-row > div { flex: 1; min-width: 200px; }
+        .status-badge { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 9999px; font-size: 0.8rem; font-weight: 600; text-transform: capitalize; }
+        .status-running { background: #fef9c3; color: #92400e; }
+        .status-completed { background: #dcfce7; color: #166534; }
+        .status-failed { background: #fee2e2; color: #991b1b; }
+        .status-created { background: #f1f5f9; color: #475569; }
     </style>
     <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
     <script>var basePath = "{{ base_path }}";</script>

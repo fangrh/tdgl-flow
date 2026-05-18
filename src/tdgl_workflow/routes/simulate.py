@@ -114,15 +114,19 @@ async def simulate_submit(request: Request):
 
     num_sites = mesh_data["num_sites"]
 
+    # Compute 2D grid shape from mesh spatial extent and density
+    import numpy as np
+    sites = np.array(mesh_data["sites"])
+    x_range = sites[:, 0].max() - sites[:, 0].min()
+    y_range = sites[:, 1].max() - sites[:, 1].min()
+    spacing = np.sqrt(x_range * y_range / max(num_sites, 1))
+    nx = max(2, round(x_range / spacing))
+    ny = max(2, round(y_range / spacing))
+    grid_shape = [ny, nx]
+
     # Build full params with mesh/schedule for data service storage
     full_device_params = dict(device_params)
-    full_device_params["mesh"] = {
-        "sites": mesh_data["sites"],
-        "elements": mesh_data["elements"],
-        "probe_indices": mesh_data["probe_indices"],
-        "num_sites": mesh_data["num_sites"],
-        "num_elements": mesh_data["num_elements"],
-    }
+    full_device_params["mesh"] = mesh_data
 
     full_timing_params = dict(timing_params)
     full_timing_params["schedule"] = {
@@ -131,23 +135,30 @@ async def simulate_submit(request: Request):
         "solve_time": timing_data["solve_time"],
         "n_steps": timing_data["n_steps"],
     }
+    full_timing_params["grid_shape"] = grid_shape
+    full_timing_params["solver_options"] = solver_options
+
+    mesh_data = full_device_params.get("mesh", {})
 
     with httpx.Client(timeout=30.0) as client:
-        create_resp = client.post(
+        submit_resp = client.post(
             f"{settings.data_service_url}/api/runs",
             json={
                 "solver_type": "cpp-tdgl",
-                "grid_shape": [num_sites, 1],
+                "n_sites": mesh_data.get("num_sites", 0),
                 "device_params": full_device_params,
                 "timing_params": full_timing_params,
-                "metadata": {"solver_options": solver_options},
+                "mesh_sites": mesh_data.get("sites"),
+                "mesh_elements": mesh_data.get("elements"),
+                "solver_options": solver_options,
                 "total_frames": timing_data["n_steps"],
             },
         )
-        create_resp.raise_for_status()
-        created_run = create_resp.json()
+        submit_resp.raise_for_status()
+        created_run = submit_resp.json()
         run_id = created_run["run_id"]
 
+        import json as _json
         workflow = {
             "apiVersion": "argoproj.io/v1alpha1",
             "kind": "Workflow",
@@ -162,6 +173,9 @@ async def simulate_submit(request: Request):
                     "parameters": [
                         {"name": "run-id", "value": run_id},
                         {"name": "data-service-url", "value": settings.data_service_url},
+                        {"name": "device-params-json", "value": _json.dumps(full_device_params)},
+                        {"name": "timing-params-json", "value": _json.dumps(full_timing_params)},
+                        {"name": "solver-options-json", "value": _json.dumps(solver_options)},
                         {"name": "cpu", "value": str(cpu_cores)},
                         {"name": "memory", "value": f"{memory_gb}Gi"},
                     ],
@@ -174,6 +188,7 @@ async def simulate_submit(request: Request):
                 f"{settings.argo_server_url}/api/v1/workflows/{settings.tdgl_namespace}",
                 json={"workflow": workflow},
                 headers={"Content-Type": "application/json"},
+                verify=False,
             )
         except httpx.HTTPError:
             pass
