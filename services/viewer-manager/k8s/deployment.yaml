@@ -16,7 +16,7 @@ spec:
       serviceAccountName: viewer-manager
       containers:
         - name: viewer-manager
-          image: ghcr.io/fangrh/viewer-manager:48ccaf2
+          image: ghcr.io/fangrh/viewer-manager:03386d3
           ports:
             - containerPort: 8000
           env:
