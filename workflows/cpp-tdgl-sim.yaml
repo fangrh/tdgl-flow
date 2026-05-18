@@ -12,7 +12,7 @@ spec:
       - name: data-service-url
         value: "http://data-viewer.tdgl.svc.cluster.local"
       - name: image
-        value: "ghcr.io/fangrh/cpp-tdgl-runner:latest"
+        value: "ghcr.io/fangrh/cpp-tdgl-runner:163ef91
       - name: device-params-json
         value: "{}"
       - name: timing-params-json
