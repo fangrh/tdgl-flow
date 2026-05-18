@@ -34,7 +34,8 @@ def _fetch_runs(settings: Settings) -> list:
         if resp.status_code == 200:
             runs = resp.json()
             for run in runs:
-                run["viewer_url"] = "/tdgl/viewer"
+                run["viewer_url"] = "/tdgl/viewer"  # fallback, not used directly anymore
+                run["has_viewer"] = True  # all runs can be viewed on demand
             return runs
     except httpx.HTTPError:
         pass
@@ -206,6 +207,6 @@ async def simulate_submit(request: Request):
         "timing_params": full_timing_params,
         "submitted": True,
         "run_id": run_id,
-        "viewer_url": "/tdgl/viewer",
+        "viewer_url": None,
         "runs": runs,
     })
