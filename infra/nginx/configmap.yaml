@@ -30,31 +30,12 @@ data:
 
         location /argocd {
             proxy_pass http://argocd-server.argocd.svc.cluster.local;
-            proxy_redirect /argocd /argocd;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header Accept-Encoding "";
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
-            header_filter_by_lua_block {
-                local cookies = ngx.header["Set-Cookie"]
-                if not cookies then return end
-                if type(cookies) == "string" then cookies = {cookies} end
-                for i, c in ipairs(cookies) do
-                    c = ngx.re.gsub(c, "SameSite=[^;]+", "SameSite=none")
-                    if not ngx.re.find(c, "SameSite=") then
-                        c = c .. "; SameSite=none"
-                    end
-                    if not ngx.re.find(c, "Secure") then
-                        c = c .. "; Secure"
-                    end
-                    cookies[i] = c
-                end
-                ngx.header["Set-Cookie"] = cookies
-            }
             sub_filter '<base href="/">' '<base href="/argocd/">';
             sub_filter_once on;
             sub_filter_types text/html;
