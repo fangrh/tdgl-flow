@@ -231,9 +231,157 @@
         <td>{{ run.run_id[:8] }}</td>
         <td><span class="status-badge status-{{ run.status }}">{{ run.status }}</span></td>
         <td>{{ run.created_at }}</td>
-        <td><a href="{{ run.viewer_url }}" target="_blank">View</a></td>
+        <td><button class="btn-view" onclick="viewerManager.viewRun('{{ run.run_id }}')">View</button></td>
     </tr>
     {% endfor %}
 </table>
 {% endif %}
+
+<div id="viewerArea" style="display:none;">
+    <h2>Viewer <span id="viewerRunId" style="color:#64748b;font-size:0.9rem;"></span></h2>
+    <div class="viewer-frame-wrapper">
+        <div class="viewer-status">
+            <span class="dot idle" id="viewerDot"></span>
+            <span id="viewerStatusText">Idle</span>
+            <button class="btn-close-viewer" id="btnCloseViewer" onclick="viewerManager.closeViewer()">Close</button>
+        </div>
+        <div id="viewerLoading" class="viewer-loading" style="display:none;">Starting viewer session...</div>
+        <div id="viewerError" class="viewer-error" style="display:none;"></div>
+        <iframe id="viewerFrame" style="display:none;"></iframe>
+    </div>
+</div>
+<script>
+var viewerManager = (function() {
+    var currentSessionId = null;
+    var heartbeatTimer = null;
+    var pollTimer = null;
+    var apiBase = basePath + "/api";
+
+    function setStatus(state, text) {
+        var dot = document.getElementById("viewerDot");
+        var statusText = document.getElementById("viewerStatusText");
+        dot.className = "dot " + state;
+        statusText.textContent = text;
+    }
+
+    function showViewerArea() {
+        document.getElementById("viewerArea").style.display = "";
+    }
+
+    function hideIframe() {
+        document.getElementById("viewerFrame").style.display = "none";
+        document.getElementById("viewerFrame").src = "";
+        document.getElementById("viewerLoading").style.display = "none";
+        document.getElementById("viewerError").style.display = "none";
+    }
+
+    function stopTimers() {
+        if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    function releaseSession() {
+        if (!currentSessionId) return;
+        var sid = currentSessionId;
+        navigator.sendBeacon(apiBase + "/viewer-sessions/" + sid + "/release");
+        currentSessionId = null;
+    }
+
+    function pollStatus(sid) {
+        fetch(apiBase + "/viewer-sessions/" + sid)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.status === "READY") {
+                    setStatus("ready", "Ready");
+                    document.getElementById("viewerLoading").style.display = "none";
+                    var frame = document.getElementById("viewerFrame");
+                    frame.src = "/viewer-session/" + sid + "/";
+                    frame.style.display = "";
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+                    heartbeatTimer = setInterval(function() {
+                        fetch(apiBase + "/viewer-sessions/" + sid + "/heartbeat", {method: "POST"}).catch(function(){});
+                    }, 30000);
+                } else if (data.status === "FAILED") {
+                    setStatus("failed", "Failed: " + (data.error_message || "Unknown error"));
+                    document.getElementById("viewerLoading").style.display = "none";
+                    document.getElementById("viewerError").textContent = data.error_message || "Viewer failed to start";
+                    document.getElementById("viewerError").style.display = "";
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+                } else {
+                    setStatus("starting", "Starting...");
+                }
+            })
+            .catch(function() {
+                setStatus("failed", "Connection error");
+                clearInterval(pollTimer);
+                pollTimer = null;
+            });
+    }
+
+    function viewRun(runId) {
+        releaseSession();
+        stopTimers();
+        hideIframe();
+
+        currentSessionId = null;
+        showViewerArea();
+        document.getElementById("viewerRunId").textContent = "(" + runId.substring(0, 8) + ")";
+        document.getElementById("viewerLoading").style.display = "";
+        setStatus("starting", "Creating session...");
+
+        fetch(apiBase + "/viewer-sessions", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({run_id: runId, viewer_type: "data-viewer"}),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                setStatus("failed", "Error: " + data.error);
+                document.getElementById("viewerLoading").style.display = "none";
+                document.getElementById("viewerError").textContent = data.error;
+                document.getElementById("viewerError").style.display = "";
+                return;
+            }
+            currentSessionId = data.session_id;
+
+            if (data.status === "READY") {
+                setStatus("ready", "Ready");
+                document.getElementById("viewerLoading").style.display = "none";
+                var frame = document.getElementById("viewerFrame");
+                frame.src = "/viewer-session/" + data.session_id + "/";
+                frame.style.display = "";
+                heartbeatTimer = setInterval(function() {
+                    fetch(apiBase + "/viewer-sessions/" + data.session_id + "/heartbeat", {method: "POST"}).catch(function(){});
+                }, 30000);
+            } else {
+                setStatus("starting", "Starting...");
+                pollTimer = setInterval(function() { pollStatus(data.session_id); }, 2000);
+            }
+        })
+        .catch(function(err) {
+            setStatus("failed", "Error creating session");
+            document.getElementById("viewerLoading").style.display = "none";
+            document.getElementById("viewerError").textContent = err.message;
+            document.getElementById("viewerError").style.display = "";
+        });
+    }
+
+    function closeViewer() {
+        releaseSession();
+        stopTimers();
+        hideIframe();
+        document.getElementById("viewerArea").style.display = "none";
+        currentSessionId = null;
+    }
+
+    window.addEventListener("beforeunload", function() {
+        releaseSession();
+    });
+
+    return { viewRun: viewRun, closeViewer: closeViewer };
+})();
+</script>
 {% endblock %}
