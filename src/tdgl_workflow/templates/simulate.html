@@ -247,14 +247,21 @@
         </div>
         <div id="viewerLoading" class="viewer-loading" style="display:none;">Starting viewer session...</div>
         <div id="viewerError" class="viewer-error" style="display:none;"></div>
-        <iframe id="viewerFrame" style="display:none;"></iframe>
+        <iframe id="viewerFrame" style="display:none;" sandbox="allow-scripts allow-same-origin"></iframe>
     </div>
 </div>
 <script>
 var viewerManager = (function() {
+    var POLL_INITIAL = 2000;
+    var POLL_MAX = 16000;
+    var HEARTBEAT_INTERVAL = 30000;
+    var HEARTBEAT_FAIL_THRESHOLD = 3;
+
     var currentSessionId = null;
     var heartbeatTimer = null;
     var pollTimer = null;
+    var pollInterval = POLL_INITIAL;
+    var heartbeatFails = 0;
     var apiBase = basePath + "/api";
 
     function setStatus(state, text) {
@@ -278,6 +285,8 @@ var viewerManager = (function() {
     function stopTimers() {
         if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        pollInterval = POLL_INITIAL;
+        heartbeatFails = 0;
     }
 
     function releaseSession() {
@@ -285,6 +294,21 @@ var viewerManager = (function() {
         var sid = currentSessionId;
         navigator.sendBeacon(apiBase + "/viewer-sessions/" + sid + "/release");
         currentSessionId = null;
+    }
+
+    function startHeartbeat(sid) {
+        heartbeatFails = 0;
+        heartbeatTimer = setInterval(function() {
+            fetch(apiBase + "/viewer-sessions/" + sid + "/heartbeat", {method: "POST"})
+                .then(function(r) { if (r.ok) heartbeatFails = 0; })
+                .catch(function() {
+                    heartbeatFails++;
+                    if (heartbeatFails >= HEARTBEAT_FAIL_THRESHOLD) {
+                        console.warn("viewer heartbeat failed " + heartbeatFails + " times");
+                        setStatus("failed", "Viewer connection lost");
+                    }
+                });
+        }, HEARTBEAT_INTERVAL);
     }
 
     function pollStatus(sid) {
@@ -299,9 +323,7 @@ var viewerManager = (function() {
                     frame.style.display = "";
                     clearInterval(pollTimer);
                     pollTimer = null;
-                    heartbeatTimer = setInterval(function() {
-                        fetch(apiBase + "/viewer-sessions/" + sid + "/heartbeat", {method: "POST"}).catch(function(){});
-                    }, 30000);
+                    startHeartbeat(sid);
                 } else if (data.status === "FAILED") {
                     setStatus("failed", "Failed: " + (data.error_message || "Unknown error"));
                     document.getElementById("viewerLoading").style.display = "none";
@@ -311,6 +333,9 @@ var viewerManager = (function() {
                     pollTimer = null;
                 } else {
                     setStatus("starting", "Starting...");
+                    clearInterval(pollTimer);
+                    pollInterval = Math.min(pollInterval * 2, POLL_MAX);
+                    pollTimer = setInterval(function() { pollStatus(sid); }, pollInterval);
                 }
             })
             .catch(function() {
@@ -353,12 +378,10 @@ var viewerManager = (function() {
                 var frame = document.getElementById("viewerFrame");
                 frame.src = "/viewer-session/" + data.session_id + "/";
                 frame.style.display = "";
-                heartbeatTimer = setInterval(function() {
-                    fetch(apiBase + "/viewer-sessions/" + data.session_id + "/heartbeat", {method: "POST"}).catch(function(){});
-                }, 30000);
+                startHeartbeat(data.session_id);
             } else {
                 setStatus("starting", "Starting...");
-                pollTimer = setInterval(function() { pollStatus(data.session_id); }, 2000);
+                pollTimer = setInterval(function() { pollStatus(data.session_id); }, pollInterval);
             }
         })
         .catch(function(err) {
