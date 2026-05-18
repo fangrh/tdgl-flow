@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     argo_server_url: str = "http://argo-workflows-server.argo.svc.cluster.local:2746"
     session_secret: str = "change-me-in-production"
     tdgl_namespace: str = "tdgl"
+    viewer_manager_url: str = "http://viewer-manager.tdgl.svc.cluster.local"
 
     model_config = SettingsConfigDict(
         env_prefix="TDGL_WORKFLOW_",
