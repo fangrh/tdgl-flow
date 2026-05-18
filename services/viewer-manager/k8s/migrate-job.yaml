@@ -5,7 +5,7 @@ metadata:
   namespace: tdgl
   annotations:
     argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   template:
     spec:
@@ -24,3 +24,5 @@ spec:
       imagePullSecrets:
         - name: ghcr-secret
   backoffLimit: 3
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 300
