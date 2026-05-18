@@ -38,21 +38,25 @@ jobs:
           GENERATOR=false
           WORKFLOW=false
           RUNNER=false
+          VIEWER_MGR=false
           echo "$CHANGES" | grep -qE "^(src/tdgl_data/|services/data-viewer/)" && VIEWER=true
           echo "$CHANGES" | grep -qE "^(src/tdgl_data/synthetic\.py|src/tdgl_generator/|services/generator/)" && GENERATOR=true
           echo "$CHANGES" | grep -qE "^(src/tdgl_workflow/|services/tdgl-workflow/|pyproject.toml)" && WORKFLOW=true
           echo "$CHANGES" | grep -qE "^(services/cpp-tdgl-runner/|src/cpp-tdgl/)" && RUNNER=true
+          echo "$CHANGES" | grep -qE "^(src/viewer_manager/|services/viewer-manager/)" && VIEWER_MGR=true
           echo "build_viewer=$VIEWER" >> "$GITHUB_OUTPUT"
           echo "build_generator=$GENERATOR" >> "$GITHUB_OUTPUT"
           echo "build_workflow=$WORKFLOW" >> "$GITHUB_OUTPUT"
           echo "build_runner=$RUNNER" >> "$GITHUB_OUTPUT"
+          echo "build_viewer_mgr=$VIEWER_MGR" >> "$GITHUB_OUTPUT"
           echo "Viewer changed: $VIEWER"
           echo "Generator changed: $GENERATOR"
           echo "Workflow changed: $WORKFLOW"
           echo "Runner changed: $RUNNER"
+          echo "Viewer-manager changed: $VIEWER_MGR"
 
       - name: Log in to GHCR
-        if: steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true' || steps.changes.outputs.build_workflow == 'true' || steps.changes.outputs.build_runner == 'true'
+        if: steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true' || steps.changes.outputs.build_workflow == 'true' || steps.changes.outputs.build_runner == 'true' || steps.changes.outputs.build_viewer_mgr == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -95,8 +99,17 @@ jobs:
             .
           docker push ghcr.io/fangrh/cpp-tdgl-runner:$SHA
 
+      - name: Build and push viewer-manager
+        if: steps.changes.outputs.build_viewer_mgr == 'true'
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          docker build -f services/viewer-manager/Dockerfile \
+            -t ghcr.io/fangrh/viewer-manager:$SHA \
+            .
+          docker push ghcr.io/fangrh/viewer-manager:$SHA
+
       - name: Update manifest tags and commit
-        if: github.ref == 'refs/heads/main' && (steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true' || steps.changes.outputs.build_workflow == 'true' || steps.changes.outputs.build_runner == 'true')
+        if: github.ref == 'refs/heads/main' && (steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true' || steps.changes.outputs.build_workflow == 'true' || steps.changes.outputs.build_runner == 'true' || steps.changes.outputs.build_viewer_mgr == 'true')
         run: |
           SHA=$(git rev-parse --short HEAD)
           git config user.name "github-actions[bot]"
@@ -117,6 +130,10 @@ jobs:
             sed -i "s|ghcr.io/fangrh/cpp-tdgl-runner:.*|ghcr.io/fangrh/cpp-tdgl-runner:$SHA|g" workflows/cpp-tdgl-sim.yaml
             echo "Updated cpp-tdgl-runner tag to $SHA"
           fi
-          git add services/data-viewer/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml workflows/cpp-tdgl-sim.yaml
+          if [ "${{ steps.changes.outputs.build_viewer_mgr }}" = "true" ]; then
+            sed -i "s|image: ghcr.io/fangrh/viewer-manager:.*|image: ghcr.io/fangrh/viewer-manager:$SHA|" services/viewer-manager/k8s/deployment.yaml
+            echo "Updated viewer-manager tag to $SHA"
+          fi
+          git add services/data-viewer/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml services/viewer-manager/k8s/deployment.yaml workflows/cpp-tdgl-sim.yaml
           git diff --cached --quiet || git commit -m "ci: update image tags to $SHA"
           git push
