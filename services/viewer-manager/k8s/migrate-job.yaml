@@ -1,0 +1,23 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: tdgl
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  template:
+    spec:
+      containers:
+        - name: migrate
+          image: ghcr.io/fangrh/viewer-manager:latest
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: VIEWER_MANAGER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: data-viewer-config
+                  key: TDGL_DATABASE_URL
+      restartPolicy: Never
+  backoffLimit: 3
