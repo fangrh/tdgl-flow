@@ -35,7 +35,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["tdgl_data*", "tdgl_generator*", "tdgl_workflow*"]
+include = ["tdgl_data*", "tdgl_generator*", "tdgl_workflow*", "tdgl_sdk*"]
 
 [tool.setuptools.package-data]
 tdgl_data = ["static/*.html"]
