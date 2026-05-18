@@ -80,11 +80,11 @@ spec:
             value: "{{workflow.parameters.solver-options-json}}"
         resources:
           requests:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
+            cpu: "2"
+            memory: "4Gi"
           limits:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
+            cpu: "2"
+            memory: "4Gi"
         volumeMounts:
           - name: run-data
             mountPath: /data
