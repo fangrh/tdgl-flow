@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from tdgl_data.config import Settings
 from tdgl_data.db import create_engine_from_url, create_session_factory
 from tdgl_data.events import FrameAvailableEvent, RunCompletedEvent, bus
-from tdgl_data.models import Base, Frame, Run
+from tdgl_data.models import Base, Run
 from tdgl_data.zarr_store import ZarrStore
 from tdgl_data.repository import (
     append_frame_record,
@@ -23,7 +23,6 @@ from tdgl_data.repository import (
     get_available_frame_metadata,
     get_available_iv_points,
     get_frame,
-    get_iv_points,
     get_run,
     get_timeline,
     list_runs,
@@ -35,6 +34,7 @@ from tdgl_data.schemas import (
     FrameMetadataResponse,
     FrameResponse,
     IVPointResponse,
+    MeshResponse,
     RunResponse,
     TimelineResponse,
     UpdateRunStatusRequest,
@@ -52,10 +52,11 @@ def _run_response(run: Run) -> RunResponse:
         metadata=run.metadata_,
         created_at=run.created_at.isoformat() if run.created_at else None,
         total_frames=run.total_frames,
+        n_sites=run.n_sites,
     )
 
 
-def _frame_metadata(frame: Frame) -> FrameMetadataResponse:
+def _frame_metadata(frame) -> FrameMetadataResponse:
     return FrameMetadataResponse(
         frame_index=frame.frame_index,
         time_value=frame.time_value,
@@ -63,54 +64,6 @@ def _frame_metadata(frame: Frame) -> FrameMetadataResponse:
         voltage=frame.voltage,
         status=frame.status,
     )
-
-
-def _grid_shape(run: Run) -> tuple[int, int]:
-    grid_shape = run.mesh_metadata.get("grid_shape")
-    if (
-        not isinstance(grid_shape, list)
-        or len(grid_shape) != 2
-        or not all(isinstance(value, int) for value in grid_shape)
-    ):
-        raise HTTPException(status_code=500, detail="Invalid run grid metadata")
-    return grid_shape[0], grid_shape[1]
-
-
-def _validate_frame_arrays(body: FrameAppendRequest, grid_shape: tuple[int, int]) -> dict[str, list[list[float]]]:
-    arrays: dict[str, list[list[float]]] = {}
-    for field in ("psi_real", "psi_imag", "mu"):
-        value = getattr(body, field)
-        try:
-            array = np.asarray(value, dtype="float32")
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"{field} must be a rectangular 2D array",
-            ) from exc
-        if array.ndim != 2:
-            raise HTTPException(status_code=422, detail=f"{field} must be a rectangular 2D array")
-        if array.shape != grid_shape:
-            raise HTTPException(status_code=422, detail=f"{field} shape must match run grid_shape")
-        arrays[field] = value
-    return arrays
-
-
-def _compute_frame_stats(arrays: dict[str, list[list[float]]]) -> dict[str, dict[str, float]]:
-    stats: dict[str, dict[str, float]] = {}
-    for name, values in arrays.items():
-        values_array = np.asarray(values, dtype="float32")
-        stats[name] = {"min": float(np.min(values_array)), "max": float(np.max(values_array))}
-    return stats
-
-
-def _update_stats(
-    stats: dict[str, dict[str, float]],
-    frame_stats: dict[str, dict[str, float]],
-) -> None:
-    for name, entry in frame_stats.items():
-        aggregate = stats.setdefault(name, {"min": float("inf"), "max": float("-inf")})
-        aggregate["min"] = min(aggregate["min"], entry["min"])
-        aggregate["max"] = max(aggregate["max"], entry["max"])
 
 
 def create_app(
@@ -195,15 +148,18 @@ def create_app(
             run = create_run(
                 session,
                 solver_type=body.solver_type,
-                grid_shape=body.grid_shape,
+                n_sites=body.n_sites,
                 device_params=body.device_params,
                 timing_params=body.timing_params,
                 metadata=body.metadata,
                 git_commit=body.git_commit,
                 image_tag=body.image_tag,
                 total_frames=body.total_frames,
+                mesh_sites=body.mesh_sites,
+                mesh_elements=body.mesh_elements,
+                solver_options=body.solver_options,
             )
-            app.state.zarr_store.create_run(run.run_id, tuple(body.grid_shape))
+            app.state.zarr_store.create_run(run.run_id, body.n_sites)
             session.commit()
             session.refresh(run)
         return _run_response(run)
@@ -256,10 +212,25 @@ def create_app(
             if get_frame(session, run_id, body.frame_index) is not None:
                 raise HTTPException(status_code=409, detail="Frame already exists")
 
-            arrays = _validate_frame_arrays(body, _grid_shape(run))
-            stats = _compute_frame_stats(arrays)
-            np_arrays = {k: np.asarray(v, dtype="float32") for k, v in arrays.items()}
-            app.state.zarr_store.append_frame(run_id, body.frame_index, np_arrays)
+            n_sites = run.n_sites or len(body.psi_real)
+            for field_name in ("psi_real", "psi_imag", "mu"):
+                value = getattr(body, field_name)
+                if len(value) != n_sites:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"{field_name} must have {n_sites} elements, got {len(value)}",
+                    )
+
+            arrays = {
+                "psi_real": np.asarray(body.psi_real, dtype="float64"),
+                "psi_imag": np.asarray(body.psi_imag, dtype="float64"),
+                "mu": np.asarray(body.mu, dtype="float64"),
+            }
+            stats = {}
+            for name, arr in arrays.items():
+                stats[name] = {"min": float(np.min(arr)), "max": float(np.max(arr))}
+
+            app.state.zarr_store.append_frame(run_id, body.frame_index, arrays)
             try:
                 frame = append_frame_record(
                     session,
@@ -270,7 +241,6 @@ def create_app(
                     voltage=body.voltage,
                     frame_stats=stats,
                 )
-                frame.zarr_exists = True
             except IntegrityError:
                 session.rollback()
                 raise HTTPException(status_code=409, detail="Frame already exists") from None
@@ -307,7 +277,10 @@ def create_app(
             frame_responses = []
             for fi, tv, je, volt, st, fs in rows:
                 if fs:
-                    _update_stats(stats, fs)
+                    for name, entry in fs.items():
+                        aggregate = stats.setdefault(name, {"min": float("inf"), "max": float("-inf")})
+                        aggregate["min"] = min(aggregate["min"], entry["min"])
+                        aggregate["max"] = max(aggregate["max"], entry["max"])
                 frame_responses.append(FrameMetadataResponse(
                     frame_index=fi, time_value=tv, je=je, voltage=volt, status=st,
                 ))
@@ -342,15 +315,8 @@ def create_app(
             frame = get_frame(session, run_id, frame_index)
             if frame is None or frame.status != "available":
                 raise HTTPException(status_code=404, detail="Frame not found")
-            if frame.zarr_exists:
-                zarr_arrays = app.state.zarr_store.get_frame(run_id, frame_index)
-                arrays = {k: v.tolist() for k, v in zarr_arrays.items()}
-            else:
-                arrays = {
-                    "psi_real": frame.psi_real,
-                    "psi_imag": frame.psi_imag,
-                    "mu": frame.mu,
-                }
+            zarr_arrays = app.state.zarr_store.get_frame(run_id, frame_index)
+            arrays = {k: v.tolist() for k, v in zarr_arrays.items()}
             return FrameResponse(
                 run_id=run_id,
                 frame_index=frame_index,
@@ -358,6 +324,22 @@ def create_app(
                 je=frame.je,
                 voltage=frame.voltage,
                 arrays=arrays,
+            )
+
+    @app.get("/api/runs/{run_id}/mesh", response_model=MeshResponse)
+    def api_get_mesh(run_id: str) -> MeshResponse:
+        with session_factory() as session:
+            run = get_run(session, run_id)
+            if run is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+            if run.mesh_sites is None:
+                raise HTTPException(status_code=404, detail="Run has no mesh data")
+            device_params = run.device_params or {}
+            return MeshResponse(
+                sites=run.mesh_sites,
+                elements=run.mesh_elements or [],
+                probe_indices=device_params.get("mesh", {}).get("probe_indices", []),
+                n_sites=run.n_sites or len(run.mesh_sites),
             )
 
     return app

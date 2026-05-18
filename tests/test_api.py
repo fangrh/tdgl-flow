@@ -8,7 +8,7 @@ from tdgl_data.dev_app import create_dev_app
 
 
 def test_create_and_get_run(client):
-    response = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [4, 3]})
+    response = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 12})
     assert response.status_code == 201
     run_id = response.json()["run_id"]
 
@@ -27,7 +27,7 @@ def test_missing_run_returns_404(client):
 def test_delete_run_removes_database_record(client):
     created = client.post(
         "/api/runs",
-        json={"solver_type": "synthetic", "grid_shape": [3, 4]},
+        json={"solver_type": "synthetic", "n_sites": 9},
     )
     assert created.status_code == 201
     run_id = created.json()["run_id"]
@@ -37,9 +37,9 @@ def test_delete_run_removes_database_record(client):
         "time_value": 0.0,
         "je": 0.0,
         "voltage": 0.0,
-        "psi_real": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
-        "psi_imag": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
-        "mu": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        "psi_real": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "psi_imag": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "mu": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     }
     client.post(f"/api/runs/{run_id}/frames", json=frame_body)
 
@@ -58,8 +58,8 @@ def test_delete_missing_run_returns_404(client):
 
 
 def test_list_runs_returns_created_runs(client):
-    first = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [4, 3]})
-    second = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [5, 2]})
+    first = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 12})
+    second = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 10})
 
     response = client.get("/api/runs")
 
@@ -71,7 +71,7 @@ def test_list_runs_returns_created_runs(client):
 def test_create_run_response_includes_metadata(client):
     payload = {
         "solver_type": "synthetic",
-        "grid_shape": [4, 3],
+        "n_sites": 12,
         "device_params": {"length": 12},
         "timing_params": {"dt": 0.25},
         "metadata": {"label": "smoke"},
@@ -81,24 +81,12 @@ def test_create_run_response_includes_metadata(client):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["mesh_metadata"]["grid_shape"] == [4, 3]
+    assert body["mesh_metadata"]["n_sites"] == 12
+    assert body["n_sites"] == 12
     assert "zarr_root" not in body
     assert body["device_params"] == {"length": 12}
     assert body["timing_params"] == {"dt": 0.25}
     assert body["metadata"] == {"label": "smoke"}
-
-
-@pytest.mark.parametrize(
-    "grid_shape",
-    [[-1, 3], [0, 3], [4, 0], [4, -2], [True, 3], [3, True]],
-)
-def test_create_run_rejects_invalid_grid_shape_dimensions(client, grid_shape):
-    response = client.post(
-        "/api/runs",
-        json={"solver_type": "synthetic", "grid_shape": grid_shape},
-    )
-
-    assert response.status_code == 422
 
 
 def test_create_schema_false_preserves_missing_schema_boundary(tmp_path):
@@ -111,7 +99,7 @@ def test_create_schema_false_preserves_missing_schema_boundary(tmp_path):
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(
             "/api/runs",
-            json={"solver_type": "synthetic", "grid_shape": [4, 3]},
+            json={"solver_type": "synthetic", "n_sites": 12},
         )
 
     assert response.status_code == 500
@@ -275,13 +263,13 @@ def test_dev_app_factory_creates_schema(tmp_path, monkeypatch):
     app = create_dev_app()
 
     with TestClient(app) as client:
-        response = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+        response = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 4})
 
     assert response.status_code == 201
 
 
 def test_append_frame_and_read_timeline_iv_and_frame(client):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 4})
     run_id = created.json()["run_id"]
 
     frame_body = {
@@ -289,9 +277,9 @@ def test_append_frame_and_read_timeline_iv_and_frame(client):
         "time_value": 0.1,
         "je": 1.2,
         "voltage": 0.024,
-        "psi_real": [[1.0, 0.5], [0.25, 0.0]],
-        "psi_imag": [[0.0, 0.5], [0.75, 1.0]],
-        "mu": [[-0.1, 0.0], [0.1, 0.2]],
+        "psi_real": [1.0, 0.5, 0.25, 0.0],
+        "psi_imag": [0.0, 0.5, 0.75, 1.0],
+        "mu": [-0.1, 0.0, 0.1, 0.2],
     }
     appended = client.post(f"/api/runs/{run_id}/frames", json=frame_body)
     assert appended.status_code == 201
@@ -307,20 +295,20 @@ def test_append_frame_and_read_timeline_iv_and_frame(client):
 
     frame = client.get(f"/api/runs/{run_id}/frames/0")
     assert frame.status_code == 200
-    assert frame.json()["arrays"]["psi_real"][0][0] == 1.0
+    assert frame.json()["arrays"]["psi_real"][0] == 1.0
 
 
 def test_append_duplicate_frame_returns_409(client):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [1, 1]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 1})
     run_id = created.json()["run_id"]
     body = {
         "frame_index": 0,
         "time_value": 0.0,
         "je": 0.0,
         "voltage": 0.0,
-        "psi_real": [[0.0]],
-        "psi_imag": [[0.0]],
-        "mu": [[0.0]],
+        "psi_real": [0.0],
+        "psi_imag": [0.0],
+        "mu": [0.0],
     }
 
     assert client.post(f"/api/runs/{run_id}/frames", json=body).status_code == 201
@@ -343,7 +331,7 @@ def test_append_commit_failure_leaves_no_readable_frame(tmp_path):
     with TestClient(app, raise_server_exceptions=False) as client:
         created = client.post(
             "/api/runs",
-            json={"solver_type": "synthetic", "grid_shape": [1, 1]},
+            json={"solver_type": "synthetic", "n_sites": 1},
         )
         run_id = created.json()["run_id"]
         event.listen(engine, "commit", fail_commit)
@@ -355,9 +343,9 @@ def test_append_commit_failure_leaves_no_readable_frame(tmp_path):
                     "time_value": 0.0,
                     "je": 0.0,
                     "voltage": 0.0,
-                    "psi_real": [[5.0]],
-                    "psi_imag": [[0.0]],
-                    "mu": [[0.0]],
+                    "psi_real": [5.0],
+                    "psi_imag": [0.0],
+                    "mu": [0.0],
                 },
             )
         finally:
@@ -372,18 +360,18 @@ def test_append_commit_failure_leaves_no_readable_frame(tmp_path):
 
 
 def test_append_duplicate_frame_does_not_alter_existing_stored_frame(client):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [1, 1]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 1})
     run_id = created.json()["run_id"]
     original = {
         "frame_index": 0,
         "time_value": 0.0,
         "je": 0.0,
         "voltage": 0.0,
-        "psi_real": [[1.0]],
-        "psi_imag": [[0.0]],
-        "mu": [[0.0]],
+        "psi_real": [1.0],
+        "psi_imag": [0.0],
+        "mu": [0.0],
     }
-    duplicate = {**original, "psi_real": [[9.0]]}
+    duplicate = {**original, "psi_real": [9.0]}
 
     assert client.post(f"/api/runs/{run_id}/frames", json=original).status_code == 201
     response = client.post(f"/api/runs/{run_id}/frames", json=duplicate)
@@ -391,28 +379,27 @@ def test_append_duplicate_frame_does_not_alter_existing_stored_frame(client):
 
     assert response.status_code == 409
     assert frame.status_code == 200
-    assert frame.json()["arrays"]["psi_real"] == [[1.0]]
+    assert frame.json()["arrays"]["psi_real"] == [1.0]
 
 
 @pytest.mark.parametrize(
     "body_update",
     [
-        {"psi_real": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]},
-        {"psi_real": [[1.0, 2.0], [3.0]]},
-        {"psi_real": [1.0, 2.0]},
+        {"psi_real": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
+        {"psi_real": [1.0]},
     ],
 )
-def test_append_frame_rejects_wrong_shape_and_ragged_arrays(client, body_update):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+def test_append_frame_rejects_wrong_length_arrays(client, body_update):
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 4})
     run_id = created.json()["run_id"]
     body = {
         "frame_index": 0,
         "time_value": 0.0,
         "je": 0.0,
         "voltage": 0.0,
-        "psi_real": [[1.0, 2.0], [3.0, 4.0]],
-        "psi_imag": [[0.0, 0.0], [0.0, 0.0]],
-        "mu": [[0.0, 0.0], [0.0, 0.0]],
+        "psi_real": [1.0, 2.0, 3.0, 4.0],
+        "psi_imag": [0.0, 0.0, 0.0, 0.0],
+        "mu": [0.0, 0.0, 0.0, 0.0],
         **body_update,
     }
 
@@ -423,16 +410,16 @@ def test_append_frame_rejects_wrong_shape_and_ragged_arrays(client, body_update)
 
 @pytest.mark.parametrize("missing_field", ["psi_real", "psi_imag", "mu"])
 def test_append_frame_rejects_missing_array_fields(client, missing_field):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [1, 1]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 1})
     run_id = created.json()["run_id"]
     body = {
         "frame_index": 0,
         "time_value": 0.0,
         "je": 0.0,
         "voltage": 0.0,
-        "psi_real": [[0.0]],
-        "psi_imag": [[0.0]],
-        "mu": [[0.0]],
+        "psi_real": [0.0],
+        "psi_imag": [0.0],
+        "mu": [0.0],
     }
     body.pop(missing_field)
 
@@ -443,7 +430,7 @@ def test_append_frame_rejects_missing_array_fields(client, missing_field):
 
 @pytest.mark.parametrize("frame_index", [-1, True, 1.2, "0"])
 def test_append_frame_rejects_invalid_frame_index(client, frame_index):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [1, 1]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 1})
     run_id = created.json()["run_id"]
     response = client.post(
         f"/api/runs/{run_id}/frames",
@@ -452,9 +439,9 @@ def test_append_frame_rejects_invalid_frame_index(client, frame_index):
             "time_value": 0.0,
             "je": 0.0,
             "voltage": 0.0,
-            "psi_real": [[0.0]],
-            "psi_imag": [[0.0]],
-            "mu": [[0.0]],
+            "psi_real": [0.0],
+            "psi_imag": [0.0],
+            "mu": [0.0],
         },
     )
 
@@ -463,7 +450,7 @@ def test_append_frame_rejects_invalid_frame_index(client, frame_index):
 
 @pytest.mark.parametrize("frame_index", ["-1", "true", "1.2"])
 def test_read_frame_rejects_invalid_frame_index(client, frame_index):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [1, 1]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 1})
     run_id = created.json()["run_id"]
 
     response = client.get(f"/api/runs/{run_id}/frames/{frame_index}")
@@ -472,7 +459,7 @@ def test_read_frame_rejects_invalid_frame_index(client, frame_index):
 
 
 def test_append_frame_stores_frame_stats(client):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 4})
     run_id = created.json()["run_id"]
 
     response = client.post(
@@ -482,9 +469,9 @@ def test_append_frame_stores_frame_stats(client):
             "time_value": 0.1,
             "je": 1.0,
             "voltage": 0.03,
-            "psi_real": [[1.0, 0.5], [0.25, 0.0]],
-            "psi_imag": [[0.0, 0.5], [0.75, 1.0]],
-            "mu": [[-0.1, 0.0], [0.1, 0.2]],
+            "psi_real": [1.0, 0.5, 0.25, 0.0],
+            "psi_imag": [0.0, 0.5, 0.75, 1.0],
+            "mu": [-0.1, 0.0, 0.1, 0.2],
         },
     )
     assert response.status_code == 201
@@ -504,7 +491,7 @@ def test_append_frame_stores_frame_stats(client):
 
 
 def test_timeline_stats_use_cached_frame_stats(client):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 4})
     run_id = created.json()["run_id"]
 
     client.post(
@@ -514,9 +501,9 @@ def test_timeline_stats_use_cached_frame_stats(client):
             "time_value": 0.0,
             "je": 0.0,
             "voltage": 0.0,
-            "psi_real": [[1.0, 2.0], [3.0, 4.0]],
-            "psi_imag": [[0.0, 0.0], [0.0, 0.0]],
-            "mu": [[0.5, 1.0], [1.5, 2.0]],
+            "psi_real": [1.0, 2.0, 3.0, 4.0],
+            "psi_imag": [0.0, 0.0, 0.0, 0.0],
+            "mu": [0.5, 1.0, 1.5, 2.0],
         },
     )
     client.post(
@@ -526,9 +513,9 @@ def test_timeline_stats_use_cached_frame_stats(client):
             "time_value": 0.1,
             "je": 1.0,
             "voltage": 0.03,
-            "psi_real": [[-1.0, 0.0], [0.0, 5.0]],
-            "psi_imag": [[0.0, 0.0], [0.0, 0.0]],
-            "mu": [[-1.0, 0.0], [0.0, 3.0]],
+            "psi_real": [-1.0, 0.0, 0.0, 5.0],
+            "psi_imag": [0.0, 0.0, 0.0, 0.0],
+            "mu": [-1.0, 0.0, 0.0, 3.0],
         },
     )
 
@@ -550,7 +537,7 @@ def test_sse_returns_404_for_unknown_run(client):
 def test_sse_endpoint_exists_for_valid_run(client):
     created = client.post(
         "/api/runs",
-        json={"solver_type": "synthetic", "grid_shape": [2, 2]},
+        json={"solver_type": "synthetic", "n_sites": 4},
     )
     assert created.status_code == 201
     run_id = created.json()["run_id"]
@@ -566,7 +553,7 @@ def test_viewer_supports_live_updates(client):
 
 
 def test_frame_arrays_roundtrip_through_zarr(client):
-    created = client.post("/api/runs", json={"solver_type": "synthetic", "grid_shape": [2, 2]})
+    created = client.post("/api/runs", json={"solver_type": "synthetic", "n_sites": 4})
     run_id = created.json()["run_id"]
 
     frame_body = {
@@ -574,29 +561,19 @@ def test_frame_arrays_roundtrip_through_zarr(client):
         "time_value": 0.5,
         "je": 1.0,
         "voltage": 0.02,
-        "psi_real": [[1.0, 2.0], [3.0, 4.0]],
-        "psi_imag": [[-1.0, -2.0], [-3.0, -4.0]],
-        "mu": [[0.1, 0.2], [0.3, 0.4]],
+        "psi_real": [1.0, 2.0, 3.0, 4.0],
+        "psi_imag": [-1.0, -2.0, -3.0, -4.0],
+        "mu": [0.1, 0.2, 0.3, 0.4],
     }
     appended = client.post(f"/api/runs/{run_id}/frames", json=frame_body)
     assert appended.status_code == 201
 
-    from tdgl_data.repository import get_frame
-    session_factory = client.app.state.session_factory
-    with session_factory() as session:
-        frame = get_frame(session, run_id, 0)
-        assert frame is not None
-        assert frame.zarr_exists is True
-        assert frame.psi_real is None
-        assert frame.psi_imag is None
-        assert frame.mu is None
-
     resp = client.get(f"/api/runs/{run_id}/frames/0")
     assert resp.status_code == 200
     arrays = resp.json()["arrays"]
-    assert np.allclose(arrays["psi_real"], [[1.0, 2.0], [3.0, 4.0]])
-    assert np.allclose(arrays["psi_imag"], [[-1.0, -2.0], [-3.0, -4.0]])
-    assert np.allclose(arrays["mu"], [[0.1, 0.2], [0.3, 0.4]])
+    assert np.allclose(arrays["psi_real"], [1.0, 2.0, 3.0, 4.0])
+    assert np.allclose(arrays["psi_imag"], [-1.0, -2.0, -3.0, -4.0])
+    assert np.allclose(arrays["mu"], [0.1, 0.2, 0.3, 0.4])
 
 
 def test_viewer_supports_live_updates(client):
@@ -607,3 +584,45 @@ def test_viewer_supports_live_updates(client):
     assert "autoFollow" in response.text
     assert "closeEventSource" in response.text
     assert "openEventSource" in response.text
+
+
+def test_get_mesh_returns_stored_mesh_data(client):
+    created = client.post(
+        "/api/runs",
+        json={
+            "solver_type": "cpp-tdgl",
+            "n_sites": 3,
+            "mesh_sites": [[0.0, 0.0], [1.0, 0.0], [0.5, 0.8]],
+            "mesh_elements": [[0, 1, 2]],
+            "device_params": {"mesh": {"probe_indices": [0, 2]}},
+        },
+    )
+    assert created.status_code == 201
+    run_id = created.json()["run_id"]
+
+    response = client.get(f"/api/runs/{run_id}/mesh")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sites"] == [[0.0, 0.0], [1.0, 0.0], [0.5, 0.8]]
+    assert data["elements"] == [[0, 1, 2]]
+    assert data["probe_indices"] == [0, 2]
+    assert data["n_sites"] == 3
+
+
+def test_get_mesh_returns_404_when_no_mesh(client):
+    created = client.post(
+        "/api/runs",
+        json={"solver_type": "synthetic", "n_sites": 4},
+    )
+    assert created.status_code == 201
+    run_id = created.json()["run_id"]
+
+    response = client.get(f"/api/runs/{run_id}/mesh")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Run has no mesh data"
+
+
+def test_get_mesh_returns_404_for_unknown_run(client):
+    response = client.get("/api/runs/nonexistent/mesh")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Run not found"
