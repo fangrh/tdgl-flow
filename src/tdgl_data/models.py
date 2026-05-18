@@ -42,6 +42,10 @@ class Run(Base):
     mesh_metadata: Mapped[dict] = mapped_column(
         json_type, default=dict, nullable=False
     )
+    mesh_sites: Mapped[dict | None] = mapped_column(json_type, default=None, nullable=True)
+    mesh_elements: Mapped[dict | None] = mapped_column(json_type, default=None, nullable=True)
+    n_sites: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    solver_options: Mapped[dict | None] = mapped_column(json_type, default=None, nullable=True)
     metadata_: Mapped[dict] = mapped_column(
         "metadata", json_type, default=dict, nullable=False
     )
@@ -67,10 +71,6 @@ class Frame(Base):
     je: Mapped[float] = mapped_column(Float, nullable=False)
     voltage: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
-    psi_real: Mapped[list | None] = mapped_column(json_type, nullable=True)
-    psi_imag: Mapped[list | None] = mapped_column(json_type, nullable=True)
-    mu: Mapped[list | None] = mapped_column(json_type, nullable=True)
-    zarr_exists: Mapped[bool] = mapped_column(default=False, nullable=False)
     frame_stats: Mapped[dict | None] = mapped_column(
         json_type, default=None, nullable=True
     )

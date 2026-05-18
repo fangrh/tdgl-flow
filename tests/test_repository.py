@@ -16,28 +16,39 @@ from tdgl_data.repository import (
 )
 
 
-def _make_arrays(rows=4, cols=3):
-    return {
-        "psi_real": [[0.0] * cols for _ in range(rows)],
-        "psi_imag": [[0.0] * cols for _ in range(rows)],
-        "mu": [[0.0] * cols for _ in range(rows)],
-    }
-
-
 def test_create_run_defaults(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(8, 6))
+    run = create_run(session, solver_type="synthetic", n_sites=8)
     session.commit()
 
     loaded = get_run(session, run.run_id)
     assert loaded is not None
     assert loaded.status == "created"
     assert loaded.solver_type == "synthetic"
-    assert loaded.mesh_metadata["grid_shape"] == [8, 6]
+    assert loaded.mesh_metadata["n_sites"] == 8
+
+
+def test_create_run_with_per_site_fields(session):
+    run = create_run(
+        session,
+        solver_type="cpp-tdgl",
+        n_sites=120,
+        mesh_sites=[[0.0, 0.0], [1.0, 0.0], [0.5, 0.8]],
+        mesh_elements=[[0, 1, 2]],
+        device_params={"film_width": 10},
+        timing_params={"mode": "simple"},
+        solver_options={"dt": 1e-6},
+    )
+    session.commit()
+
+    loaded = get_run(session, run.run_id)
+    assert loaded.n_sites == 120
+    assert loaded.mesh_sites == [[0.0, 0.0], [1.0, 0.0], [0.5, 0.8]]
+    assert loaded.mesh_elements == [[0, 1, 2]]
+    assert loaded.solver_options == {"dt": 1e-6}
 
 
 def test_append_frame_record_creates_timeline_and_iv_point(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
-    arrays = _make_arrays()
+    run = create_run(session, solver_type="synthetic", n_sites=12)
     append_frame_record(
         session,
         run_id=run.run_id,
@@ -45,9 +56,6 @@ def test_append_frame_record_creates_timeline_and_iv_point(session):
         time_value=0.25,
         je=1.5,
         voltage=0.01,
-        psi_real=arrays["psi_real"],
-        psi_imag=arrays["psi_imag"],
-        mu=arrays["mu"],
     )
     session.commit()
 
@@ -63,8 +71,7 @@ def test_append_frame_record_creates_timeline_and_iv_point(session):
 
 
 def test_duplicate_frame_record_raises_integrity_error(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
-    arrays = _make_arrays()
+    run = create_run(session, solver_type="synthetic", n_sites=12)
     append_frame_record(
         session,
         run_id=run.run_id,
@@ -72,9 +79,6 @@ def test_duplicate_frame_record_raises_integrity_error(session):
         time_value=0.0,
         je=0.0,
         voltage=0.0,
-        psi_real=arrays["psi_real"],
-        psi_imag=arrays["psi_imag"],
-        mu=arrays["mu"],
     )
     session.commit()
 
@@ -86,14 +90,10 @@ def test_duplicate_frame_record_raises_integrity_error(session):
             time_value=0.1,
             je=0.1,
             voltage=0.1,
-            psi_real=arrays["psi_real"],
-            psi_imag=arrays["psi_imag"],
-            mu=arrays["mu"],
         )
 
 
 def test_append_frame_record_missing_run_raises_integrity_error(session):
-    arrays = _make_arrays(1, 1)
     with pytest.raises(IntegrityError):
         append_frame_record(
             session,
@@ -102,15 +102,11 @@ def test_append_frame_record_missing_run_raises_integrity_error(session):
             time_value=0.0,
             je=0.0,
             voltage=0.0,
-            psi_real=arrays["psi_real"],
-            psi_imag=arrays["psi_imag"],
-            mu=arrays["mu"],
         )
 
 
 def test_deleting_run_cascades_metadata_rows(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(4, 3))
-    arrays = _make_arrays()
+    run = create_run(session, solver_type="synthetic", n_sites=12)
     append_frame_record(
         session,
         run_id=run.run_id,
@@ -118,9 +114,6 @@ def test_deleting_run_cascades_metadata_rows(session):
         time_value=0.25,
         je=1.5,
         voltage=0.01,
-        psi_real=arrays["psi_real"],
-        psi_imag=arrays["psi_imag"],
-        mu=arrays["mu"],
     )
     create_event(session, run.run_id, "frame_available", {"frame_index": 0})
     session.commit()
@@ -135,8 +128,8 @@ def test_deleting_run_cascades_metadata_rows(session):
 
 
 def test_complete_and_fail_run_status(session):
-    completed = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
-    failed = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
+    completed = create_run(session, solver_type="synthetic", n_sites=4)
+    failed = create_run(session, solver_type="synthetic", n_sites=4)
 
     complete_run(session, completed.run_id)
     fail_run(session, failed.run_id, "solver crashed")
@@ -149,7 +142,7 @@ def test_complete_and_fail_run_status(session):
 
 
 def test_create_event_records_ordered_payload(session):
-    run = create_run(session, solver_type="synthetic", grid_shape=(2, 2))
+    run = create_run(session, solver_type="synthetic", n_sites=4)
     event = create_event(session, run.run_id, "frame_available", {"frame_index": 7})
     session.commit()
 
