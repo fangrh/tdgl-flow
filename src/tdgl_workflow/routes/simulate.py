@@ -189,7 +189,6 @@ async def simulate_submit(request: Request):
                 f"{settings.argo_server_url}/api/v1/workflows/{settings.tdgl_namespace}",
                 json={"workflow": workflow},
                 headers={"Content-Type": "application/json"},
-                verify=False,
             )
         except httpx.HTTPError:
             pass
