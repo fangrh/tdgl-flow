@@ -11,7 +11,7 @@ spec:
     spec:
       containers:
         - name: migrate
-          image: ghcr.io/fangrh/viewer-manager:f46bb09
+          image: ghcr.io/fangrh/viewer-manager:03cddb2
           command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
           workingDir: /app
           env:
