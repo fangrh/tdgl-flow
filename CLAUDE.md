@@ -112,6 +112,22 @@ kubectl -n tdgl submit workflow --from workflowtemplate/<name> \
   -p run-id=<id> -p image=ghcr.io/fangrh/tdgl-<runner>:<tag>
 ```
 
+## Viewer Manager
+
+The `viewer-manager` service manages on-demand viewer Pods. Viewer sessions are temporary — created when users click View, cleaned up after idle timeout.
+
+### Architecture
+- `viewer-manager` creates/deletes viewer Pods via Kubernetes API
+- Each session gets a unique `session_id` and a URL at `/viewer-session/{sid}/`
+- Sessions are reused when the same run_id + viewer_type is requested
+- Background task cleans up idle (15min) and failed (10min) sessions
+
+### When modifying viewer-manager
+- All DB schema changes must go through Alembic: `alembic revision --autogenerate -m "description"`
+- Migration runs via Argo CD Pre-Sync Hook before each sync
+- Tests mock K8s API — run with `pytest tests/test_viewer_manager.py -v`
+- The `kubernetes` Python client reads in-cluster config by default
+
 ## Dev Mode
 
 When iterating on a service, use dev mode for fast feedback.
