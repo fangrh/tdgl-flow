@@ -12,7 +12,8 @@ spec:
       containers:
         - name: migrate
           image: ghcr.io/fangrh/viewer-manager:latest
-          command: ["alembic", "upgrade", "head"]
+          command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+          workingDir: /app
           env:
             - name: VIEWER_MANAGER_DATABASE_URL
               valueFrom:
@@ -20,4 +21,6 @@ spec:
                   name: data-viewer-config
                   key: TDGL_DATABASE_URL
       restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-secret
   backoffLimit: 3
