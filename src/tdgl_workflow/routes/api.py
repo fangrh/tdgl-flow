@@ -191,3 +191,55 @@ async def submit_workflow(request: Request):
         "workflow_name": workflow_name,
         "status": "created",
     })
+
+
+@router.post("/viewer-sessions")
+async def create_viewer_session(request: Request):
+    body = await request.json()
+    settings: Settings = request.app.state.settings
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{settings.viewer_manager_url}/api/viewer-sessions",
+            json=body,
+        )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@router.get("/viewer-sessions/{session_id}")
+async def get_viewer_session(session_id: str, request: Request):
+    settings: Settings = request.app.state.settings
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(
+            f"{settings.viewer_manager_url}/api/viewer-sessions/{session_id}",
+        )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@router.post("/viewer-sessions/{session_id}/heartbeat")
+async def heartbeat_viewer_session(session_id: str, request: Request):
+    settings: Settings = request.app.state.settings
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.post(
+            f"{settings.viewer_manager_url}/api/viewer-sessions/{session_id}/heartbeat",
+        )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@router.post("/viewer-sessions/{session_id}/release")
+async def release_viewer_session(session_id: str, request: Request):
+    settings: Settings = request.app.state.settings
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.post(
+            f"{settings.viewer_manager_url}/api/viewer-sessions/{session_id}/release",
+        )
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@router.delete("/viewer-sessions/{session_id}")
+async def delete_viewer_session(session_id: str, request: Request):
+    settings: Settings = request.app.state.settings
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.delete(
+            f"{settings.viewer_manager_url}/api/viewer-sessions/{session_id}",
+        )
+        return JSONResponse(status_code=resp.status_code)
