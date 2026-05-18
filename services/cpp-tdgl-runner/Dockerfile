@@ -13,8 +13,11 @@ RUN mkdir build && cd build && \
     cmake --install . --prefix /usr/local
 
 WORKDIR /app
-RUN pip install --no-cache-dir numpy httpx h5py
+RUN pip install --no-cache-dir numpy httpx h5py scipy zarr tdgl sqlalchemy pydantic pydantic-settings
 
+COPY src/tdgl_workflow/ /app/vendor/tdgl_workflow/
 COPY services/cpp-tdgl-runner/runner.py /app/runner.py
+COPY services/cpp-tdgl-runner/build_device.py /app/build_device.py
+COPY services/cpp-tdgl-runner/build_timing.py /app/build_timing.py
 
 CMD ["python", "/app/runner.py"]
