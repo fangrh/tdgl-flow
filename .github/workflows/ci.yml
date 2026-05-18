@@ -132,8 +132,9 @@ jobs:
           fi
           if [ "${{ steps.changes.outputs.build_viewer_mgr }}" = "true" ]; then
             sed -i "s|image: ghcr.io/fangrh/viewer-manager:.*|image: ghcr.io/fangrh/viewer-manager:$SHA|" services/viewer-manager/k8s/deployment.yaml
+            sed -i "s|image: ghcr.io/fangrh/viewer-manager:.*|image: ghcr.io/fangrh/viewer-manager:$SHA|" services/viewer-manager/k8s/migrate-job.yaml
             echo "Updated viewer-manager tag to $SHA"
           fi
-          git add services/data-viewer/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml services/viewer-manager/k8s/deployment.yaml workflows/cpp-tdgl-sim.yaml
+          git add services/data-viewer/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml services/viewer-manager/k8s/deployment.yaml services/viewer-manager/k8s/migrate-job.yaml workflows/cpp-tdgl-sim.yaml
           git diff --cached --quiet || git commit -m "ci: update image tags to $SHA"
           git push
