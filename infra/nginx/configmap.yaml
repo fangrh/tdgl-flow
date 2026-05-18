@@ -58,6 +58,15 @@ data:
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
         }
+
+        location /viewer-session/ {
+            proxy_pass http://viewer-manager.tdgl.svc.cluster.local/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
     }
   index.html: |
     <!DOCTYPE html>
