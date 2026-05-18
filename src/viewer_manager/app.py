@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from viewer_manager.cleanup import cleanup_loop
 from viewer_manager.config import Settings
-from viewer_manager.db import create_engine_from_url, create_session_factory
+from viewer_manager.db import create_engine_from_url, create_session_factory, session_scope
 from viewer_manager.k8s_client import (
     create_viewer_pod,
     get_pod_failure_reason,
@@ -40,7 +40,7 @@ def _session_response(vs: ViewerSession) -> SessionResponse:
     )
 
 
-def create_app(*, database_url: str | None = None, create_schema: bool = False) -> FastAPI:
+def create_app(*, database_url: str | None = None, create_schema: bool = False, start_cleanup: bool = True) -> FastAPI:
     settings = Settings()
     if database_url is None:
         database_url = settings.database_url
@@ -56,9 +56,12 @@ def create_app(*, database_url: str | None = None, create_schema: bool = False) 
     app.state.http_client = httpx.AsyncClient(timeout=30.0)
 
     @app.on_event("startup")
-    async def start_cleanup():
-        import asyncio
-        asyncio.create_task(cleanup_loop(session_factory, settings))
+    async def startup_event():
+        if start_cleanup:
+            import asyncio
+            asyncio.create_task(cleanup_loop(session_factory, settings))
+        else:
+            logger.info("Cleanup task disabled (start_cleanup=False)")
 
     @app.on_event("shutdown")
     async def shutdown_client():

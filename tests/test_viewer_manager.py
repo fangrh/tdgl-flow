@@ -11,9 +11,12 @@ from viewer_manager.db import create_engine_from_url, create_session_factory
 
 @pytest.fixture
 def client():
-    app = create_app(database_url="sqlite+pysqlite:///:memory:", create_schema=True)
+    app = create_app(database_url="sqlite+pysqlite:///test_viewer.db", create_schema=True, start_cleanup=False)
     with TestClient(app) as c:
         yield c
+    import os
+    if os.path.exists("test_viewer.db"):
+        os.remove("test_viewer.db")
 
 
 def test_create_session_returns_starting(client):
@@ -92,7 +95,7 @@ def test_delete_session(client):
         resp = client.post("/api/viewer-sessions", json={"run_id": "run-5", "viewer_type": "data-viewer"})
     sid = resp.json()["session_id"]
 
-    with patch("viewer_manager.app.delete_viewer_pod"):
+    with patch("viewer_manager.k8s_client.delete_viewer_pod"):
         resp = client.delete(f"/api/viewer-sessions/{sid}")
     assert resp.status_code == 204
 
