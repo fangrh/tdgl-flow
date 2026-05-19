@@ -13,7 +13,7 @@ spec:
       - name: data-service-url
         value: "http://data-viewer.tdgl.svc.cluster.local"
       - name: image
-        value: "ghcr.io/fangrh/cpp-tdgl-runner:163ef91"
+        value: "ghcr.io/fangrh/cpp-tdgl-runner:dev"
       - name: device-params-json
         value: "{}"
       - name: timing-params-json
@@ -24,6 +24,8 @@ spec:
         value: "2"
       - name: memory
         value: "4Gi"
+      - name: dev-mode
+        value: "false"
 
   templates:
     - name: simulation-pipeline
@@ -38,6 +40,7 @@ spec:
     - name: build-device-step
       container:
         image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
         command: [python, /app/build_device.py]
         env:
           - name: RUN_ID
@@ -49,10 +52,15 @@ spec:
         volumeMounts:
           - name: run-data
             mountPath: /data
+          - name: cpp-tdgl-src
+            mountPath: /src/cpp-tdgl
+          - name: tdgl-workflow-src
+            mountPath: /app/vendor/tdgl_workflow
 
     - name: build-timing-step
       container:
         image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
         command: [python, /app/build_timing.py]
         env:
           - name: RUN_ID
@@ -64,10 +72,15 @@ spec:
         volumeMounts:
           - name: run-data
             mountPath: /data
+          - name: cpp-tdgl-src
+            mountPath: /src/cpp-tdgl
+          - name: tdgl-workflow-src
+            mountPath: /app/vendor/tdgl_workflow
 
     - name: simulate-step
       container:
         image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
         command: [python, /app/runner.py]
         env:
           - name: TDGL_RUN_ID
@@ -78,6 +91,8 @@ spec:
             value: "/data"
           - name: SOLVER_OPTIONS
             value: "{{workflow.parameters.solver-options-json}}"
+          - name: DEV_MODE
+            value: "{{workflow.parameters.dev-mode}}"
         resources:
           requests:
             cpu: "2"
@@ -88,6 +103,20 @@ spec:
         volumeMounts:
           - name: run-data
             mountPath: /data
+          - name: cpp-tdgl-src
+            mountPath: /src/cpp-tdgl
+          - name: tdgl-workflow-src
+            mountPath: /app/vendor/tdgl_workflow
+
+  volumes:
+    - name: cpp-tdgl-src
+      hostPath:
+        path: /mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/bind/cpp-tdgl
+        type: Directory
+    - name: tdgl-workflow-src
+      hostPath:
+        path: /mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/bind/tdgl_workflow
+        type: Directory
 
   volumeClaimTemplates:
     - metadata:
