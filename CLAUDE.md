@@ -9,8 +9,7 @@ Follow these rules when modifying services, workflows, or CI.
 |------|-----------|
 | Add a new service | Copy `templates/services/_base/` → adapt → update CI + Argo CD + kustomization + SDK + notebook |
 | Add a new workflow | Copy `templates/workflows/_base/` → adapt → add to `workflows/` |
-| Debug a service | Use SDK diagnostic methods or dev mode (see below) |
-| Start a session | Read `.dev-mode` to know current dev state (bind-mount modules) |
+| Debug a service | Use SDK diagnostic methods or common dev commands (see below) |
 | Modify K8s manifests | Follow manifest rules below — no hardcoded tags or limits |
 | Change CI triggers | Follow CI rules below — path-based, per-service |
 
@@ -193,75 +192,9 @@ Naming: use underscores — service `viewer-manager` → `viewer_manager_api_dem
 - [ ] `pytest tests/test_sdk.py -k "<name>"` passes
 - [ ] `python notebooks/<name>_api_demo.py` runs without error
 - [ ] Diagnostic methods return valid responses
-## Dev Mode
 
-When iterating on a service, use dev mode for fast feedback.
+## Dev Commands
 
-### Dev tool options
-Present these to the user and recommend based on needs:
-
-| Tool | Best for | Recommend when |
-|------|----------|----------------|
-| **Skaffold** | Simple services, kustomize | Default recommendation for this project |
-| **Tilt** | Multi-service with UI | User needs hot-reload across services |
-| **Raw docker/kubectl** | One-off debugging | No extra tooling desired |
-
-### Bind Mount Dev Pattern (Inner Loop)
-During development, compiled artifacts can be bind-mounted into containers for fast iteration
-without rebuilding images. This is the **Inner Loop** — once business logic is validated, bake
-artifacts into the Docker image for production.
-
-```
-bind/                    # NOT committed to git
-├── <module>/            # per business module
-│   └── ...              # compiled/built artifacts ready to mount
-```
-
-- `bind/<module>/` maps to the corresponding `src/<module>/` source code
-- Only mount specific modules you are actively iterating on
-- Add `bind/` to `.gitignore` — it contains local build artifacts
-- Transition to prod: rebuild the Docker image with artifacts included, remove the mount
-
-### When to suggest Bind Mount Dev
-The agent should proactively suggest this mode when **any** of these conditions are met:
-- User is iterating on a specific module and rebuilding images repeatedly
-- User is debugging compiled artifacts (e.g. C++ solver binaries)
-- User asks for faster dev iteration or mentions slow rebuild cycles
-- Changes are confined to `src/<module>/` and don't touch Dockerfile or dependencies
-
-When triggered, present it as a choice: "You're iterating on `<module>`. Want to use bind mount dev
-to skip image rebuilds?" The user can also explicitly request this mode at any time.
-
-### Dev mode state file (`.dev-mode`)
-A `.dev-mode` file in the repo root tracks which modules are currently in bind mount dev mode.
-Every agent session MUST read this file at startup to understand the current dev state.
-
-Format:
-```yaml
-# .dev-mode
-mode: bind-mount
-modules:
-  - cpp-tdgl
-  # - tdgl_data
-active_since: "2026-05-19"
-```
-
-- `mode`: `bind-mount` or `standard` (image rebuild per iteration)
-- `modules`: list of modules currently bind-mounted into containers
-- Agent must update this file when activating or deactivating bind mount dev
-- Agent must remind user to transition to prod mode (remove mount, rebuild image) when done
-- `.dev-mode` is committed to git so team visibility is maintained
-
-```bash
-# Example: mount compiled cpp-tdgl binary into runner container
-kubectl -n tdgl patch deployment cpp-tdgl-runner --type=json \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-",
-  "value":{"name":"bind-mount","mountPath":"/app/tdgl_solver"}},
-  {"op":"add","path":"/spec/template/spec/volumes/-",
-  "value":{"name":"bind-mount","hostPath":{"path":"/path/to/bind/cpp-tdgl","type":"Directory"}}}]'
-```
-
-### Common dev commands
 ```bash
 # Build and push
 docker build -f services/<name>/Dockerfile -t ghcr.io/fangrh/tdgl-<name>:dev .
@@ -274,16 +207,6 @@ kubectl apply -k services/<name>/k8s/ -n tdgl
 kubectl port-forward svc/<name> 8080:80 -n tdgl
 kubectl logs -f deployment/<name> -n tdgl
 ```
-
-### Argo CD during dev
-Set Argo CD to manual sync or pause auto-sync to prevent overwriting dev changes.
-
-### After dev testing succeeds
-When service changes are verified and working, remind the user:
-> "Dev testing passed. Ready to re-enable Argo CD auto-sync? Run:
-> `argocd app set tdgl-services --sync-policy automated`"
-
-Do not re-enable auto-sync without user confirmation.
 
 ## Prod Mode
 ```
