@@ -27,6 +27,8 @@ spec:
         imagePullPolicy: Always
         command: [python, /app/build_device.py]
         env:
+          - name: RUN_ID
+            value: "{{workflow.parameters.run-id}}"
           - name: DEVICE_PARAMS
             value: "{{workflow.parameters.device-params-json}}"
           - name: DATA_DIR
@@ -39,12 +41,12 @@ spec:
             cpu: "1"
             memory: "2Gi"
         volumeMounts:
-          - name: workdir
+          - name: run-data
             mountPath: /data
 
   volumeClaimTemplates:
     - metadata:
-        name: workdir
+        name: run-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
