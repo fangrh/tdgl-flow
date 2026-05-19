@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: py-tdgl-runner
+  namespace: tdgl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: py-tdgl-runner
+  template:
+    metadata:
+      labels:
+        app: py-tdgl-runner
+    spec:
+      serviceAccountName: argo-workflow
+      containers:
+        - name: runner
+          image: ghcr.io/fangrh/py-tdgl-runner:dev
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: run-data
+              mountPath: /data
+      imagePullSecrets:
+        - name: ghcr-secret
+      volumes:
+        - name: run-data
+          emptyDir: {}
