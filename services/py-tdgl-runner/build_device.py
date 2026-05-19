@@ -12,8 +12,14 @@ from tdgl_workflow.mesh import build_rectangular_device
 
 
 def main():
-    device_params = json.loads(os.environ["DEVICE_PARAMS"])
+    try:
+        device_params = json.loads(os.environ["DEVICE_PARAMS"])
+    except (KeyError, json.JSONDecodeError) as e:
+        print(f"Invalid DEVICE_PARAMS: {e}", file=sys.stderr)
+        sys.exit(1)
+
     data_dir = os.environ.get("DATA_DIR", "/data")
+    os.makedirs(data_dir, exist_ok=True)
 
     mesh_data = build_rectangular_device(
         film_width=device_params["film_width"],
