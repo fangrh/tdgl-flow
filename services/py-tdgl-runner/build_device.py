@@ -39,6 +39,11 @@ def main():
 
     print(f"Device built: {mesh_data['num_sites']} sites, {mesh_data['num_elements']} elements")
 
+    # Output mesh JSON to stdout for consumers (e.g. marimo via pod logs)
+    print("MESH_JSON_START")
+    print(json.dumps(mesh_data))
+    print("MESH_JSON_END")
+
 
 if __name__ == "__main__":
     main()

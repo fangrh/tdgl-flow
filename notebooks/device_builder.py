@@ -25,12 +25,6 @@ def _(mo):
     return
 
 
-@app.cell
-def _():
-    pass
-    return
-
-
 @app.cell(hide_code=True)
 def argo_config(WorkflowsService, mo):
     # Argo Workflows 连接
@@ -48,18 +42,6 @@ def _(mo):
     mo.md(r"""
     ## Device 参数
     """)
-    return
-
-
-@app.cell(hide_code=True)
-def timing_header():
-    pass
-    return
-
-
-@app.cell(hide_code=True)
-def timing_params():
-    pass
     return
 
 
@@ -171,18 +153,6 @@ def _(
 
 
 @app.cell(hide_code=True)
-def submit_header():
-    pass
-    return
-
-
-@app.cell(hide_code=True)
-def submit_workflow():
-    pass
-    return
-
-
-@app.cell(hide_code=True)
 def monitor_header(mo):
     mo.md("""
     ## 获取结果
@@ -191,7 +161,7 @@ def monitor_header(mo):
 
 
 @app.cell(hide_code=True)
-def monitor_workflow(argo_svc, mo, wf_name):
+def monitor_workflow(argo_svc, json, mo, wf_name):
     import time
 
     mesh_result = None
@@ -203,18 +173,33 @@ def monitor_workflow(argo_svc, mo, wf_name):
             wf = argo_svc.get_workflow(name=wf_name, namespace="tdgl")
             phase = getattr(wf.status, "phase", "Unknown") if wf.status else "Unknown"
 
-            if phase == "Succeeded":
+            if phase in ("Succeeded", "Error"):
+                import httpx
                 try:
-                    artifact_data = argo_svc.get_output_artifact(
-                        name=wf_name,
-                        namespace="tdgl",
-                        node_name=wf_name,
-                        artifact_name="mesh",
+                    resp = httpx.get(
+                        f"http://localhost:2746/api/v1/workflows/tdgl/{wf_name}/{wf_name}/log",
+                        params={"logOptions.container": "main"},
+                        verify=False,
+                        timeout=10.0,
                     )
-                    mesh_result = artifact_data
-                    mo.md(f"Mesh ready — **{mesh_result['num_sites']}** sites, **{mesh_result['num_elements']}** elements")
+                    # Parse JSONL: each line is {"result":{"content":"...","podName":"..."}}
+                    full_log = ""
+                    for line in resp.text.strip().split("\n"):
+                        try:
+                            obj = json.loads(line)
+                            full_log += obj.get("result", {}).get("content", "") + "\n"
+                        except (json.JSONDecodeError, AttributeError):
+                            full_log += line + "\n"
+
+                    if "MESH_JSON_START" in full_log and "MESH_JSON_END" in full_log:
+                        start = full_log.index("MESH_JSON_START") + len("MESH_JSON_START")
+                        end = full_log.index("MESH_JSON_END")
+                        mesh_result = json.loads(full_log[start:end].strip())
+                        mo.md(f"Mesh ready — **{mesh_result['num_sites']}** sites, **{mesh_result['num_elements']}** elements")
+                    else:
+                        mo.md(f"Workflow **{phase}**. No mesh markers in log (need new image build).\n```\n{full_log[-300:]}\n```")
                 except Exception as e:
-                    mo.md(f"**Artifact fetch failed**: `{e}`")
+                    mo.md(f"**Log fetch failed**: `{e}`")
             else:
                 mo.md(f"Status: **{phase}**")
         else:

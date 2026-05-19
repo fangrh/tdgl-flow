@@ -18,10 +18,6 @@ spec:
 
   templates:
     - name: build
-      outputs:
-        artifacts:
-          - name: mesh
-            path: /data/mesh_meta.json
       container:
         image: "{{workflow.parameters.image}}"
         imagePullPolicy: Always
