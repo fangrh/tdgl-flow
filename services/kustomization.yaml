@@ -3,5 +3,6 @@ kind: Kustomization
 resources:
   - data-viewer/k8s/
   - generator/k8s/
+  - py-tdgl-runner/k8s/
   - tdgl-workflow/k8s/
   - viewer-manager/k8s/
