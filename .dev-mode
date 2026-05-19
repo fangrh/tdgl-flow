@@ -2,4 +2,6 @@ mode: bind-mount
 modules:
   - cpp-tdgl
   - tdgl_workflow
+  - tdgl_sdk
+  - py-tdgl-runner
 active_since: "2026-05-19"
