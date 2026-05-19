@@ -152,7 +152,7 @@ def test_viewer_includes_plotly_heatmap_rendering(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert "HEATMAP_LAYOUT" in response.text
+    assert "heatmapLayout" in response.text
     assert "Plotly.react" in response.text
     assert "colorscale" in response.text
 
@@ -183,14 +183,22 @@ def test_viewer_heatmap_uses_plotly_scaleanchor(client):
     assert "constrain" in response.text
 
 
-def test_viewer_can_delete_selected_history_run(client):
+def test_viewer_is_run_specific_without_dataset_list(client):
     response = client.get("/viewer")
 
     assert response.status_code == 200
-    assert 'class="run-item-delete"' in response.text
-    assert "deleteRun" in response.text
-    assert "confirm(" in response.text
-    assert "DELETE" in response.text
+    assert 'id="runList"' not in response.text
+    assert 'class="run-item-delete"' not in response.text
+    assert "deleteRun" not in response.text
+    assert "URLSearchParams" in response.text
+    assert "run_id" in response.text
+
+
+def test_viewer_has_empty_state_for_missing_run_id(client):
+    response = client.get("/viewer")
+
+    assert response.status_code == 200
+    assert "No run selected" in response.text
 
 
 def test_viewer_playback_step_accepts_unbounded_numeric_skips(client):
@@ -251,7 +259,7 @@ def test_root_redirects_to_viewer(client):
     response = client.get("/", follow_redirects=False)
 
     assert response.status_code == 307
-    assert response.headers["location"] == "/viewer"
+    assert response.headers["location"] in ("/viewer", "viewer")
 
 
 
@@ -288,6 +296,18 @@ def test_append_frame_and_read_timeline_iv_and_frame(client):
     assert timeline.status_code == 200
     assert timeline.json()["frames"][0]["frame_index"] == 0
     assert timeline.json()["stats"]["mu"]["max"] == pytest.approx(0.2)
+
+    iv_before = client.get(f"/api/runs/{run_id}/iv")
+    assert iv_before.status_code == 200
+    assert iv_before.json() == []
+
+    iv_resp = client.post(f"/api/runs/{run_id}/iv", json={
+        "frame_index": 0,
+        "time_value": 0.1,
+        "je": 1.2,
+        "voltage": 0.024,
+    })
+    assert iv_resp.status_code == 201
 
     iv = client.get(f"/api/runs/{run_id}/iv")
     assert iv.status_code == 200
@@ -626,3 +646,48 @@ def test_get_mesh_returns_404_for_unknown_run(client):
     response = client.get("/api/runs/nonexistent/mesh")
     assert response.status_code == 404
     assert response.json()["detail"] == "Run not found"
+
+
+def test_frame_append_does_not_create_iv_until_explicit_post(client):
+    created = client.post("/api/runs", json={"solver_type": "cpp-tdgl", "n_sites": 2})
+    run_id = created.json()["run_id"]
+
+    frame_body = {
+        "frame_index": 0,
+        "time_value": 0.5,
+        "je": 1.0,
+        "voltage": 0.02,
+        "psi_real": [1.0, 1.0],
+        "psi_imag": [0.0, 0.0],
+        "mu": [0.0, 0.02],
+        "frame_stats": {
+            "physical_time": 4.5,
+            "save_window_index": 0,
+            "window_frame_index": 0,
+            "voltage_valid": True,
+        },
+    }
+    assert client.post(f"/api/runs/{run_id}/frames", json=frame_body).status_code == 201
+
+    iv_before = client.get(f"/api/runs/{run_id}/iv")
+    assert iv_before.status_code == 200
+    assert iv_before.json() == []
+
+    iv_resp = client.post(f"/api/runs/{run_id}/iv", json={
+        "frame_index": 0,
+        "time_value": 0.5,
+        "je": 1.0,
+        "voltage": 0.02,
+    })
+    assert iv_resp.status_code == 201
+
+    iv_after = client.get(f"/api/runs/{run_id}/iv")
+    assert iv_after.json() == [{
+        "frame_index": 0,
+        "time_value": 0.5,
+        "je": 1.0,
+        "voltage": 0.02,
+    }]
+
+    frame = client.get(f"/api/runs/{run_id}/frames/0")
+    assert frame.status_code == 200

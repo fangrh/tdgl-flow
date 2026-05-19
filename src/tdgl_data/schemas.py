@@ -45,6 +45,7 @@ class FrameAppendRequest(BaseModel):
     psi_real: list[float]
     psi_imag: list[float]
     mu: list[float]
+    frame_stats: dict = Field(default_factory=dict)
 
 
 class FrameMetadataResponse(BaseModel):
@@ -63,6 +64,13 @@ class TimelineResponse(BaseModel):
 
 class IVPointResponse(BaseModel):
     frame_index: int
+    time_value: float
+    je: float
+    voltage: float
+
+
+class IVPointAppendRequest(BaseModel):
+    frame_index: StrictNonNegativeInt
     time_value: float
     je: float
     voltage: float

@@ -16,28 +16,6 @@
     main { max-width: 1580px; margin: 0 auto; padding: 24px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
     h1 { margin: 0; font-size: 24px; font-weight: 650; }
-    .run-list-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-    .run-list-header h2 { margin: 0; font-size: 15px; font-weight: 650; }
-    .run-list { max-height: 200px; overflow-y: auto; border: 1px solid #c8d0d9; border-radius: 6px; background: #ffffff; margin-bottom: 14px; }
-    .run-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #eaedf1; }
-    .run-item:last-child { border-bottom: none; }
-    .run-item:hover { background: #f0f4f8; }
-    .run-item.selected { background: #e0f2f1; border-left: 3px solid #0f766e; padding-left: 9px; }
-    .run-item-info { flex: 1; min-width: 0; }
-    .run-item-id { font-size: 13px; font-weight: 600; color: #1f2933; }
-    .run-item-meta { font-size: 12px; color: #667381; margin-top: 2px; }
-    .run-item-delete { background: none; border: none; color: #9aa5b4; font-size: 18px; padding: 0 4px; min-height: auto; cursor: pointer; line-height: 1; border-radius: 4px; }
-    .run-item-delete:hover { color: #d92d20; background: #fef2f2; }
-    .status-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; text-transform: uppercase; }
-    .status-running { background: #fef3c7; color: #92400e; }
-    .status-completed { background: #d1fae5; color: #065f46; }
-    .status-created { background: #e5e7eb; color: #374151; }
-    .status-failed { background: #fee2e2; color: #991b1b; }
-    .sync-btn { min-height: 36px; border: 1px solid #c8d0d9; border-radius: 6px; background: #ffffff; color: #1f2933; font: inherit; padding: 0 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
-    .sync-btn:hover { background: #f0f4f8; }
-    .sync-btn.spinning .sync-icon { animation: spin 0.8s linear infinite; }
-    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    .sync-icon { display: inline-block; font-size: 16px; }
     .timeline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
     button, select, input[type="number"] {
       min-height: 36px;
@@ -74,13 +52,7 @@
     <header>
       <h1>TDGL Heatmap Viewer</h1>
     </header>
-    <div class="run-list-header">
-      <h2>Datasets</h2>
-      <button class="sync-btn" id="syncRuns" title="Refresh run list">
-        <span class="sync-icon">&#x21bb;</span> Sync
-      </button>
-    </div>
-    <div class="run-list" id="runList"></div>
+    <div id="emptyState" class="status">No run selected</div>
     <section class="timeline" aria-label="Frame controls">
       <button id="prevFrame" title="Previous frame">Prev</button>
       <button id="playPause" title="Play or pause">Play</button>
@@ -127,7 +99,6 @@
     let bufferRadius = 3;
 
     const state = {
-      runs: [],
       runId: null,
       run: null,
       timeline: null,
@@ -142,10 +113,10 @@
       frameBuffer: new Map(),
       eventSource: null,
       mesh: null,
+      pollTimer: null,
     };
     const els = {
-      runList: document.getElementById("runList"),
-      syncRuns: document.getElementById("syncRuns"),
+      emptyState: document.getElementById("emptyState"),
       frameSlider: document.getElementById("frameSlider"),
       playbackStep: document.getElementById("playbackStep"),
       playbackSpeed: document.getElementById("playbackSpeed"),
@@ -162,13 +133,15 @@
       status: document.getElementById("status"),
     };
 
-    const HEATMAP_LAYOUT = {
-      margin: {l: 50, r: 20, t: 10, b: 50},
-      xaxis: {title: "x", constrain: "domain"},
-      yaxis: {title: "y", scaleanchor: "x", constrain: "domain"},
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-    };
+    function heatmapLayout() {
+      return {
+        margin: {l: 50, r: 20, t: 10, b: 50},
+        xaxis: {title: "x", constrain: "domain"},
+        yaxis: {title: "y", scaleanchor: "x", constrain: "domain"},
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(0,0,0,0)",
+      };
+    }
     const HEATMAP_CONFIG = {responsive: true, displayModeBar: false};
 
     function setStatus(message, isError = false) {
@@ -261,7 +234,7 @@
         showscale: true,
         colorbar: {title: "|psi|", thickness: 15},
       };
-      Plotly.react("psiPlot", [trace], HEATMAP_LAYOUT, HEATMAP_CONFIG);
+      Plotly.react("psiPlot", [trace], heatmapLayout(), HEATMAP_CONFIG);
     }
 
     function renderMuHeatmap(data, bounds) {
@@ -274,7 +247,7 @@
         showscale: true,
         colorbar: {title: "mu", thickness: 15},
       };
-      Plotly.react("muPlot", [trace], HEATMAP_LAYOUT, HEATMAP_CONFIG);
+      Plotly.react("muPlot", [trace], heatmapLayout(), HEATMAP_CONFIG);
     }
 
     function renderPhaseHeatmap(data) {
@@ -287,7 +260,7 @@
         showscale: true,
         colorbar: {title: "Phase", thickness: 15},
       };
-      Plotly.react("phasePlot", [trace], HEATMAP_LAYOUT, HEATMAP_CONFIG);
+      Plotly.react("phasePlot", [trace], heatmapLayout(), HEATMAP_CONFIG);
     }
 
     function renderIvCurve(ivData, currentFrameIndex) {
@@ -378,6 +351,52 @@
         state.eventSource.close();
         state.eventSource = null;
       }
+      stopPolling();
+    }
+
+    function stopPolling() {
+      if (state.pollTimer) {
+        clearInterval(state.pollTimer);
+        state.pollTimer = null;
+      }
+    }
+
+    function startPolling(runId) {
+      stopPolling();
+      state.pollTimer = setInterval(async () => {
+        try {
+          const [timeline, iv] = await Promise.all([
+            requestJson(`api/runs/${runId}/timeline`),
+            requestJson(`api/runs/${runId}/iv`),
+          ]);
+          const newFrames = timeline.frames;
+          if (newFrames.length > state.frames.length) {
+            state.timeline = timeline;
+            state.iv = iv;
+            const prevCount = state.frames.length;
+            state.frames = newFrames;
+            state.totalFrames = state.run?.total_frames || newFrames.length;
+            els.frameSlider.max = String(state.totalFrames - 1);
+            updateFramePositionLabel(state.currentFrameIndex);
+            if (prevCount === 0 && newFrames.length > 0) {
+              setControlsEnabled(true);
+              state.currentFrameIndex = 0;
+              els.frameSlider.value = "0";
+              loadFrame(0);
+            } else if (els.autoFollow.checked) {
+              const latest = newFrames[newFrames.length - 1];
+              loadFrame(latest.frame_index);
+            } else {
+              renderIvCurve(state.iv, state.currentFrameIndex);
+            }
+            setStatus(`Polled: ${newFrames.length} frames available.`);
+          }
+          const runResp = await requestJson(`api/runs/${runId}`);
+          if (runResp.status === "completed" || runResp.status === "failed") {
+            stopPolling();
+          }
+        } catch (_e) {}
+      }, 5000);
     }
 
     function openEventSource(runId) {
@@ -395,12 +414,6 @@
           status: "available",
         });
         state.frames.sort((a, b) => a.frame_index - b.frame_index);
-        state.iv.push({
-          frame_index: data.frame_index,
-          time_value: data.time_value,
-          je: data.je,
-          voltage: data.voltage,
-        });
         updateFramePositionLabel(state.currentFrameIndex);
         if (state.waitingForFrame === data.frame_index) {
           state.waitingForFrame = null;
@@ -413,7 +426,7 @@
         setStatus(`Frame ${data.frame_index} arrived (${data.frame_count} total).`);
       });
       state.eventSource.addEventListener("run_completed", () => {
-        loadRuns(state.runId);
+        setStatus("Run completed.");
       });
       state.eventSource.onerror = () => {
         setStatus("Event stream disconnected. Reconnecting...", false);
@@ -434,134 +447,6 @@
         return;
       }
       els.framePositionValue.textContent = `${frameIndex + 1} / ${total}`;
-    }
-
-    function statusBadgeClass(status) {
-      if (status === "running") return "status-running";
-      if (status === "completed") return "status-completed";
-      if (status === "failed") return "status-failed";
-      return "status-created";
-    }
-
-    function formatRunDate(run) {
-      const created = run.created_at || run.metadata?.created_at;
-      if (!created) return "unknown";
-      const d = new Date(created + (created.endsWith("Z") ? "" : "Z"));
-      if (isNaN(d.getTime())) return created.slice(0, 19);
-      return d.toLocaleString();
-    }
-
-    function renderRunList() {
-      els.runList.innerHTML = "";
-      for (const run of state.runs) {
-        const item = document.createElement("div");
-        item.className = "run-item" + (run.run_id === state.runId ? " selected" : "");
-        item.innerHTML = `
-          <div class="run-item-info">
-            <div class="run-item-id">${run.solver_type} ${run.run_id.slice(0, 8)}</div>
-            <div class="run-item-meta">
-              <span class="status-badge ${statusBadgeClass(run.status)}">${run.status}</span>
-              &middot; ${formatRunDate(run)} &middot; ${run.mesh_metadata?.grid_shape?.join("x") || "?"}
-            </div>
-          </div>
-          <button class="run-item-delete" data-run-id="${run.run_id}" title="Delete run">&times;</button>
-        `;
-        item.addEventListener("click", (e) => {
-          if (e.target.closest(".run-item-delete")) return;
-          if (run.run_id !== state.runId) {
-            stopPlayback();
-            state.runId = run.run_id;
-            renderRunList();
-            loadTimeline(state.runId).catch((error) => setStatus(error.message, true));
-          }
-        });
-        const deleteBtn = item.querySelector(".run-item-delete");
-        deleteBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          deleteRun(run.run_id);
-        });
-        els.runList.append(item);
-      }
-    }
-
-    async function deleteRun(runId) {
-      if (!confirm(`Delete run ${runId.slice(0, 8)}?`)) return;
-      try {
-        stopPlayback();
-        setStatus("Deleting run...");
-        await requestJson(`api/runs/${runId}`, {method: "DELETE"});
-        await loadRuns(state.runId === runId ? null : state.runId);
-      } catch (error) {
-        setStatus(error.message, true);
-      }
-    }
-
-    async function loadRuns(selectRunId = null) {
-      state.runs = await requestJson("api/runs");
-      state.runId = selectRunId || state.runId || state.runs[0]?.run_id || null;
-      if (state.runId && !state.runs.some(r => r.run_id === state.runId)) {
-        state.runId = state.runs[0]?.run_id || null;
-      }
-      state.run = state.runs.find(r => r.run_id === state.runId) || null;
-      renderRunList();
-      if (state.runId) {
-        await loadTimeline(state.runId);
-      } else {
-        closeEventSource();
-        state.frames = [];
-        state.totalFrames = 0;
-        state.psiBounds = null;
-        setControlsEnabled(false);
-        Plotly.purge("psiPlot");
-        Plotly.purge("phasePlot");
-        Plotly.purge("muPlot");
-        Plotly.purge("ivPlot");
-        updateFramePositionLabel();
-        setStatus("No runs available.");
-      }
-    }
-
-    async function loadTimeline(runId) {
-      setControlsEnabled(false);
-      await loadMesh(runId);
-      state.run = state.runs.find(r => r.run_id === runId) || state.run;
-      const [timeline, iv] = await Promise.all([
-        requestJson(`api/runs/${runId}/timeline`),
-        requestJson(`api/runs/${runId}/iv`),
-      ]);
-      state.timeline = timeline;
-      state.iv = iv;
-      state.frames = state.timeline.frames;
-      state.totalFrames = state.run?.total_frames || state.frames.length;
-      state.frameBuffer.clear();
-      state.waitingForFrame = null;
-      closeEventSource();
-      if (!state.totalFrames) {
-        closeEventSource();
-        setControlsEnabled(false);
-        Plotly.purge("psiPlot");
-        Plotly.purge("phasePlot");
-        Plotly.purge("muPlot");
-        Plotly.purge("ivPlot");
-        state.psiBounds = null;
-        updateFramePositionLabel();
-        setStatus("Selected run has no available frames.");
-        return;
-      }
-      state.currentFrameIndex = 0;
-      els.frameSlider.min = "0";
-      els.frameSlider.max = String(state.totalFrames - 1);
-      els.frameSlider.value = "0";
-      updateFramePositionLabel(0);
-      state.psiBounds = null;
-      renderIvCurve(state.iv, null);
-      setControlsEnabled(true);
-      openEventSource(runId);
-      if (state.frames.length) {
-        loadFrame(0);
-      } else {
-        setStatus("Waiting for frames to arrive...");
-      }
     }
 
     async function loadFrame(targetFrameIndex) {
@@ -662,16 +547,6 @@
       if (Number.isFinite(v) && v >= 0) bufferRadius = v;
     });
 
-    els.syncRuns.addEventListener("click", () => {
-      els.syncRuns.classList.add("spinning");
-      loadRuns(state.runId).then(() => {
-        setTimeout(() => els.syncRuns.classList.remove("spinning"), 400);
-      }).catch((error) => {
-        els.syncRuns.classList.remove("spinning");
-        setStatus(error.message, true);
-      });
-    });
-
     els.frameSlider.addEventListener("input", () => {
       stopPlayback();
       loadFrame(Number(els.frameSlider.value)).catch((error) => setStatus(error.message, true));
@@ -697,14 +572,57 @@
 
     window.addEventListener("beforeunload", closeEventSource);
 
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") {
-        loadRuns(state.runId).catch(() => {});
+    function selectedRunIdFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("run_id");
+    }
+
+    async function startViewer() {
+      const runId = selectedRunIdFromUrl();
+      if (!runId) {
+        els.emptyState.style.display = "block";
+        setStatus("No run selected");
+        return;
       }
-    });
+      els.emptyState.style.display = "none";
+      state.runId = runId;
+      try {
+        await loadMesh(runId);
+        const [timeline, iv] = await Promise.all([
+          requestJson(`api/runs/${runId}/timeline`),
+          requestJson(`api/runs/${runId}/iv`),
+        ]);
+        state.timeline = timeline;
+        state.iv = iv;
+        state.frames = timeline.frames;
+        state.run = await requestJson(`api/runs/${runId}`);
+        state.totalFrames = state.run?.total_frames || state.frames.length;
+        if (state.totalFrames && state.frames.length) {
+          setControlsEnabled(true);
+          state.currentFrameIndex = 0;
+          els.frameSlider.min = "0";
+          els.frameSlider.max = String(state.totalFrames - 1);
+          els.frameSlider.value = "0";
+          updateFramePositionLabel(0);
+          renderIvCurve(state.iv, null);
+          loadFrame(0);
+          openEventSource(runId);
+          if (state.run?.status === "running") {
+            startPolling(runId);
+          }
+        } else if (state.run?.status === "running") {
+          setStatus("Simulation running, waiting for frames...");
+          startPolling(runId);
+        } else {
+          setStatus("Selected run has no available frames.");
+        }
+      } catch (err) {
+        setStatus(`Unable to load run: ${err.message}`, true);
+      }
+    }
 
     setControlsEnabled(false);
-    loadRuns().catch((error) => setStatus(error.message, true));
+    startViewer();
   </script>
 </body>
 </html>

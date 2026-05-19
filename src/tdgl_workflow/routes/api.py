@@ -2,14 +2,26 @@ import json as _json
 import uuid as _uuid
 
 import httpx
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 
 from tdgl_workflow.config import Settings
 from tdgl_workflow.mesh import build_rectangular_device
 from tdgl_workflow.timing import build_timing, build_timing_segmented
 
 router = APIRouter(prefix="/api")
+
+SOLVER_WORKFLOWS = {
+    "cpp-tdgl": "cpp-tdgl-sim",
+    "py-tdgl": "py-tdgl-sim",
+}
+
+
+def workflow_template_for_solver(solver_type: str) -> str:
+    try:
+        return SOLVER_WORKFLOWS[solver_type]
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Unsupported solver_type: {solver_type}") from None
 
 
 @router.post("/preview/mesh")
@@ -61,6 +73,22 @@ async def preview_timing(request: Request):
 
     return JSONResponse(timing_data)
 
+
+
+@router.get("/runs")
+async def list_runs(request: Request):
+    settings: Settings = request.app.state.settings
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(f"{settings.data_service_url}/api/runs")
+        return JSONResponse(resp.json(), status_code=resp.status_code)
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(run_id: str, request: Request):
+    settings: Settings = request.app.state.settings
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.delete(f"{settings.data_service_url}/api/runs/{run_id}")
+        return Response(status_code=resp.status_code)
 
 
 @router.get("/cluster/resources")
@@ -120,6 +148,9 @@ async def submit_workflow(request: Request):
     body = await request.json()
     settings: Settings = request.app.state.settings
 
+    solver_type = body.get("solver_type", "cpp-tdgl")
+    workflow_template = workflow_template_for_solver(solver_type)
+
     device_params = body.get("device_params", {})
     timing_params = body.get("timing_params", {})
     mesh_data = body.get("mesh_data", {})
@@ -135,7 +166,7 @@ async def submit_workflow(request: Request):
         create_resp = await client.post(
             f"{settings.data_service_url}/api/runs",
             json={
-                "solver_type": "cpp-tdgl",
+                "solver_type": solver_type,
                 "n_sites": n_sites,
                 "device_params": device_params,
                 "timing_params": timing_params,
@@ -153,12 +184,12 @@ async def submit_workflow(request: Request):
         "apiVersion": "argoproj.io/v1alpha1",
         "kind": "Workflow",
         "metadata": {
-            "generateName": f"cpp-tdgl-{actual_run_id[:8]}-",
+            "generateName": f"{solver_type}-{actual_run_id[:8]}-",
             "namespace": settings.tdgl_namespace,
             "labels": {"run-id": actual_run_id},
         },
         "spec": {
-            "workflowTemplateRef": {"name": "cpp-tdgl-sim"},
+            "workflowTemplateRef": {"name": workflow_template},
             "arguments": {
                 "parameters": [
                     {"name": "run-id", "value": actual_run_id},
@@ -168,6 +199,7 @@ async def submit_workflow(request: Request):
                     {"name": "solver-options-json", "value": _json.dumps(solver_options)},
                     {"name": "cpu", "value": str(resources.get("cpu_cores", 2))},
                     {"name": "memory", "value": f"{resources.get('memory_gb', resources.get('memory_mib', 2048) / 1024)}Gi"},
+                    {"name": "dev-mode", "value": "true"},
                 ],
             },
         },

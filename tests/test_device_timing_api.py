@@ -48,3 +48,38 @@ def test_timing_build_returns_steps(client):
     assert len(data["steps"]) == 5
     assert data["n_steps"] == 5
     assert data["solve_time"] > 0
+
+
+def test_workflow_submit_rejects_unknown_solver(client):
+    resp = client.post("/api/workflows/submit", json={
+        "solver_type": "unknown",
+        "device_params": {},
+        "timing_params": {},
+        "mesh_data": {"num_sites": 1, "sites": [[0.0, 0.0]], "elements": []},
+        "schedule": {"n_steps": 1},
+        "solver_options": {},
+        "resources": {"cpu_cores": 1, "memory_gb": 1},
+    })
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Unsupported solver_type: unknown"
+
+
+def test_workflow_delete_run_proxies_to_data_service(client, monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 204
+        content = b""
+
+    async def fake_delete(self, url, **kwargs):
+        calls.append(url)
+        return FakeResponse()
+
+    monkeypatch.setattr("httpx.AsyncClient.delete", fake_delete)
+
+    resp = client.delete("/api/runs/run-123")
+
+    assert resp.status_code == 204
+    assert calls
+    assert calls[0].endswith("/api/runs/run-123")

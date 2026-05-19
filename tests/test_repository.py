@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from tdgl_data.models import Frame, IVPoint, Run, RunEvent
 from tdgl_data.repository import (
     append_frame_record,
+    append_iv_point_record,
     complete_run,
     create_event,
     create_run,
@@ -47,26 +48,36 @@ def test_create_run_with_per_site_fields(session):
     assert loaded.solver_options == {"dt": 1e-6}
 
 
-def test_append_frame_record_creates_timeline_and_iv_point(session):
-    run = create_run(session, solver_type="synthetic", n_sites=12)
+def test_append_frame_record_does_not_create_iv_point(session):
+    run = create_run(session, solver_type="cpp-tdgl", n_sites=4)
     append_frame_record(
         session,
         run_id=run.run_id,
         frame_index=0,
-        time_value=0.25,
-        je=1.5,
+        time_value=1.0,
+        je=2.0,
         voltage=0.01,
+        frame_stats={"mu": {"min": 0.0, "max": 0.2}, "physical_time": 6.0},
     )
-    session.commit()
 
     frame = get_frame(session, run.run_id, 0)
     timeline = get_timeline(session, run.run_id)
     iv_points = get_iv_points(session, run.run_id)
 
-    assert frame is not None
-    assert frame.status == "available"
+    assert frame.frame_stats["physical_time"] == pytest.approx(6.0)
     assert len(timeline) == 1
-    assert timeline[0].frame_index == 0
+    assert iv_points == []
+
+    append_iv_point_record(
+        session,
+        run_id=run.run_id,
+        frame_index=0,
+        time_value=1.0,
+        je=2.0,
+        voltage=0.01,
+    )
+    iv_points = get_iv_points(session, run.run_id)
+    assert len(iv_points) == 1
     assert iv_points[0].voltage == pytest.approx(0.01)
 
 

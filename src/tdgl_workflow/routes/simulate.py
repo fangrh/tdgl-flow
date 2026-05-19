@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 
 from tdgl_workflow.config import Settings
 from tdgl_workflow.mesh import build_rectangular_device
+from tdgl_workflow.routes.api import workflow_template_for_solver
 from tdgl_workflow.timing import build_timing, build_timing_segmented
 
 router = APIRouter()
@@ -60,6 +61,7 @@ def simulate_page(request: Request):
         "run_id": None,
         "viewer_url": None,
         "runs": runs,
+        "solver_type": "cpp-tdgl",
     })
 
 
@@ -72,6 +74,8 @@ async def simulate_submit(request: Request):
         return simulate_page(request)
 
     form_data = await request.form()
+    solver_type = str(form_data.get("solver_type", "cpp-tdgl"))
+    workflow_template = workflow_template_for_solver(solver_type)
     solver_options = {
         "dt": float(form_data.get("dt", "1e-6")),
         "max_dt": float(form_data.get("max_dt", "0.1")),
@@ -145,7 +149,7 @@ async def simulate_submit(request: Request):
         submit_resp = client.post(
             f"{settings.data_service_url}/api/runs",
             json={
-                "solver_type": "cpp-tdgl",
+                "solver_type": solver_type,
                 "n_sites": mesh_data.get("num_sites", 0),
                 "device_params": full_device_params,
                 "timing_params": full_timing_params,
@@ -164,12 +168,12 @@ async def simulate_submit(request: Request):
             "apiVersion": "argoproj.io/v1alpha1",
             "kind": "Workflow",
             "metadata": {
-                "generateName": f"cpp-tdgl-{run_id[:8]}-",
+                "generateName": f"{solver_type}-{run_id[:8]}-",
                 "namespace": settings.tdgl_namespace,
                 "labels": {"run-id": run_id},
             },
             "spec": {
-                "workflowTemplateRef": {"name": "cpp-tdgl-sim"},
+                "workflowTemplateRef": {"name": workflow_template},
                 "arguments": {
                     "parameters": [
                         {"name": "run-id", "value": run_id},
@@ -208,4 +212,5 @@ async def simulate_submit(request: Request):
         "run_id": run_id,
         "viewer_url": None,
         "runs": runs,
+        "solver_type": solver_type,
     })

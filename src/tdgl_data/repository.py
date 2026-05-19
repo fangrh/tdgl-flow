@@ -81,26 +81,41 @@ def append_frame_record(
         frame_stats=frame_stats,
         created_at=now,
         committed_at=now,
+        psi_real=frame_stats.get("psi_real", {}) if frame_stats else {},
+        psi_imag=frame_stats.get("psi_imag", {}) if frame_stats else {},
+        mu=frame_stats.get("mu", {}) if frame_stats else {},
+        zarr_exists=True,
     )
-    iv_point = IVPoint(
-        run_id=run_id,
-        frame_index=frame_index,
-        je=je,
-        voltage=voltage,
-        time_value=time_value,
-    )
-    session.add_all([frame, iv_point])
+    session.add(frame)
     session.flush()
     return frame
 
 
 
 def delete_frame_record(session: Session, run_id: str, frame_index: int) -> None:
-    session.execute(
-        delete(IVPoint).where(IVPoint.run_id == run_id, IVPoint.frame_index == frame_index)
-    )
     session.execute(delete(Frame).where(Frame.run_id == run_id, Frame.frame_index == frame_index))
     session.flush()
+
+
+def append_iv_point_record(
+    session: Session,
+    *,
+    run_id: str,
+    frame_index: int,
+    je: float,
+    voltage: float,
+    time_value: float,
+) -> IVPoint:
+    point = IVPoint(
+        run_id=run_id,
+        frame_index=frame_index,
+        je=je,
+        voltage=voltage,
+        time_value=time_value,
+    )
+    session.add(point)
+    session.flush()
+    return point
 
 
 def get_frame(session: Session, run_id: str, frame_index: int) -> Frame | None:

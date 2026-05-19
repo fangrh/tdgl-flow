@@ -13,6 +13,39 @@ import numpy as np
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
 
+class SaveWindowTimeline:
+    def __init__(self) -> None:
+        self.offset = 0.0
+
+    def map_physical(self, *, save_start: float, physical_time: float) -> float:
+        return self.offset + max(0.0, physical_time - save_start)
+
+    def finish_window(self, *, save_time: float) -> None:
+        self.offset += save_time
+
+
+def _group_solution_indices_by_save_window(times: np.ndarray, steps: list[dict]) -> list[list[int]]:
+    grouped = []
+    for step in steps:
+        indices = [
+            int(i)
+            for i, time_value in enumerate(times)
+            if step["save_start"] <= float(time_value) <= step["save_end"]
+        ]
+        if not indices:
+            raise RuntimeError(
+                f"No saved frames found in save window [{step['save_start']}, {step['save_end']}]"
+            )
+        grouped.append(indices)
+    return grouped
+
+
+def _voltage_from_mu(mu: np.ndarray, probe_indices: list[int]) -> tuple[float, bool]:
+    if len(probe_indices) < 2:
+        return 0.0, False
+    return float(mu[probe_indices[1]] - mu[probe_indices[0]]), True
+
+
 def main() -> None:
     run_id = os.environ["TDGL_RUN_ID"]
     data_url = os.environ["TDGL_DATA_SERVICE_URL"]
@@ -101,24 +134,61 @@ def main() -> None:
 
         probe_indices = mesh_meta["probe_indices"]
 
-        # Post frame data
-        for i, (time, psi, mu) in enumerate(zip(solution.times, solution.psi, solution.mu)):
-            voltage = 0.0
-            if len(probe_indices) >= 2:
-                voltage = float(mu[probe_indices[1]] - mu[probe_indices[0]])
+        solution_times = np.asarray(solution.times, dtype=np.float64)
+        grouped_indices = _group_solution_indices_by_save_window(solution_times, steps)
+        timeline = SaveWindowTimeline()
+        frame_index = 0
 
-            frame_data = {
-                "frame_index": i,
-                "time_value": float(time),
-                "je": je_values[i] if i < len(je_values) else 0.0,
-                "voltage": voltage,
-                "psi_real": psi.real.tolist(),
-                "psi_imag": psi.imag.tolist(),
-                "mu": mu.tolist(),
-            }
-            resp = client.post(f"/api/runs/{run_id}/frames", json=frame_data)
-            resp.raise_for_status()
-            print(f"  Posted frame {i + 1}/{len(solution.times)}")
+        for step_index, (step, indices) in enumerate(zip(steps, grouped_indices)):
+            valid_voltages = []
+            last_frame_time_value = None
+            je = float(step["je_end"])
+
+            for window_frame_index, solution_index in enumerate(indices):
+                physical_time = float(solution_times[solution_index])
+                psi = solution.psi[solution_index]
+                mu = solution.mu[solution_index]
+                voltage, voltage_valid = _voltage_from_mu(mu, probe_indices)
+                if voltage_valid:
+                    valid_voltages.append(voltage)
+
+                time_value = timeline.map_physical(
+                    save_start=step["save_start"],
+                    physical_time=physical_time,
+                )
+                frame_data = {
+                    "frame_index": frame_index,
+                    "time_value": time_value,
+                    "je": je,
+                    "voltage": voltage,
+                    "psi_real": psi.real.tolist(),
+                    "psi_imag": psi.imag.tolist(),
+                    "mu": mu.tolist(),
+                    "frame_stats": {
+                        "physical_time": physical_time,
+                        "local_time": physical_time,
+                        "save_window_index": step_index,
+                        "window_frame_index": window_frame_index,
+                        "save_start": step["save_start"],
+                        "save_end": step["save_end"],
+                        "voltage_valid": voltage_valid,
+                        "solver_type": "py-tdgl",
+                    },
+                }
+                resp = client.post(f"/api/runs/{run_id}/frames", json=frame_data)
+                resp.raise_for_status()
+                last_frame_time_value = time_value
+                frame_index += 1
+
+            if valid_voltages and last_frame_time_value is not None:
+                iv_resp = client.post(f"/api/runs/{run_id}/iv", json={
+                    "frame_index": frame_index - 1,
+                    "time_value": last_frame_time_value,
+                    "je": je,
+                    "voltage": float(np.mean(valid_voltages)),
+                })
+                iv_resp.raise_for_status()
+            timeline.finish_window(save_time=step["save_end"] - step["save_start"])
 
         client.patch(f"/api/runs/{run_id}/status", json={"status": "completed"})
         print(f"Run {run_id} completed")

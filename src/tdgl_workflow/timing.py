@@ -1,4 +1,18 @@
+def _validate_timing_inputs(je_step: float, ramp_time: float, stable_time: float, save_time: float) -> None:
+    if je_step == 0:
+        raise ValueError("je_step must be non-zero")
+    if ramp_time < 0:
+        raise ValueError("ramp_time must be greater than or equal to 0")
+    if stable_time <= 0:
+        raise ValueError("stable_time must be greater than 0")
+    if save_time <= 0:
+        raise ValueError("save_time must be greater than 0")
+    if save_time > stable_time:
+        raise ValueError("save_time must be less than or equal to stable_time")
+
+
 def _build_steps(je_initial, je_final, je_step, ramp_time, stable_time, save_time, t_offset=0):
+    _validate_timing_inputs(je_step, ramp_time, stable_time, save_time)
     n_steps = max(1, round(abs(je_final - je_initial) / abs(je_step)))
     period = ramp_time + stable_time
     sign = 1 if je_final >= je_initial else -1
@@ -8,14 +22,15 @@ def _build_steps(je_initial, je_final, je_step, ramp_time, stable_time, save_tim
         t = t_offset + i * period
         je_start = je_initial + sign * i * abs(je_step)
         je_end = je_start + sign * abs(je_step)
+        stable_end = t + period
         steps.append({
             "je_start": je_start,
             "je_end": je_end,
             "ramp_start": t,
             "ramp_end": t + ramp_time,
-            "stable_end": t + period,
-            "save_start": t + ramp_time + (stable_time - save_time) / 2,
-            "save_end": t + ramp_time + (stable_time + save_time) / 2,
+            "stable_end": stable_end,
+            "save_start": stable_end - save_time,
+            "save_end": stable_end,
         })
 
     total_time = n_steps * period

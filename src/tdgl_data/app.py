@@ -17,6 +17,7 @@ from tdgl_data.models import Base, Run
 from tdgl_data.zarr_store import ZarrStore
 from tdgl_data.repository import (
     append_frame_record,
+    append_iv_point_record,
     create_run,
     delete_frame_record,
     delete_run,
@@ -33,6 +34,7 @@ from tdgl_data.schemas import (
     FrameAppendRequest,
     FrameMetadataResponse,
     FrameResponse,
+    IVPointAppendRequest,
     IVPointResponse,
     MeshResponse,
     RunResponse,
@@ -173,6 +175,10 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Run not found") from None
             session.commit()
             session.refresh(run)
+        if body.status in ("completed", "failed"):
+            app.state.event_bus.publish(run_id, RunCompletedEvent(
+                run_id=run_id, status=body.status,
+            ))
         return _run_response(run)
 
     @app.get("/api/runs", response_model=list[RunResponse])
@@ -226,7 +232,7 @@ def create_app(
                 "psi_imag": np.asarray(body.psi_imag, dtype="float64"),
                 "mu": np.asarray(body.mu, dtype="float64"),
             }
-            stats = {}
+            stats = dict(body.frame_stats or {})
             for name, arr in arrays.items():
                 stats[name] = {"min": float(np.min(arr)), "max": float(np.max(arr))}
 
@@ -305,6 +311,32 @@ def create_app(
                 )
                 for point in get_available_iv_points(session, run_id)
             ]
+
+
+    @app.post(
+        "/api/runs/{run_id}/iv",
+        response_model=IVPointResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def api_append_iv_point(run_id: str, body: IVPointAppendRequest) -> IVPointResponse:
+        with session_factory() as session:
+            if get_run(session, run_id) is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+            point = append_iv_point_record(
+                session,
+                run_id=run_id,
+                frame_index=body.frame_index,
+                time_value=body.time_value,
+                je=body.je,
+                voltage=body.voltage,
+            )
+            session.commit()
+            return IVPointResponse(
+                frame_index=point.frame_index,
+                time_value=point.time_value,
+                je=point.je,
+                voltage=point.voltage,
+            )
 
     @app.get("/api/runs/{run_id}/frames/{frame_index}", response_model=FrameResponse)
     def api_get_frame(

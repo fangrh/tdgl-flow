@@ -44,6 +44,17 @@
     </dl>
 </div>
 <form id="simForm" method="post">
+    <h2>Workflow</h2>
+    <div class="field-row">
+        <div>
+            <label>Solver</label>
+            <select name="solver_type" id="solver_type">
+                <option value="cpp-tdgl" selected>C++ tdgl</option>
+                <option value="py-tdgl">Python tdgl</option>
+            </select>
+        </div>
+    </div>
+
     <h2>Solver Options</h2>
     <div class="field-row">
         <div>
@@ -205,6 +216,7 @@
             if (p.dt !== undefined) document.getElementById("dt").value = p.dt;
             if (p.max_dt !== undefined) document.getElementById("max_dt").value = p.max_dt;
             if (p.adaptive !== undefined) document.getElementById("adaptive").value = p.adaptive;
+            if (p.solver_type !== undefined) document.getElementById("solver_type").value = p.solver_type;
         } catch(e) {}
     }
 
@@ -216,26 +228,34 @@
             dt: document.getElementById("dt").value,
             max_dt: document.getElementById("max_dt").value,
             adaptive: document.getElementById("adaptive").value,
+            solver_type: document.getElementById("solver_type").value,
         }));
     });
 })();
 </script>
 {% endif %}
 
-{% if runs %}
 <h2>Recent Runs</h2>
-<table>
-    <tr><th>Run ID</th><th>Status</th><th>Created</th><th></th></tr>
-    {% for run in runs %}
-    <tr>
-        <td>{{ run.run_id[:8] }}</td>
-        <td><span class="status-badge status-{{ run.status }}">{{ run.status }}</span></td>
-        <td>{{ run.created_at }}</td>
-        <td><button class="btn-view" onclick="viewerManager.viewRun('{{ run.run_id }}')">View</button></td>
-    </tr>
-    {% endfor %}
-</table>
-{% endif %}
+<div id="workflowRunPanel">
+    {% if runs %}
+    <table id="runsTable">
+        <tr><th>Run ID</th><th>Solver</th><th>Status</th><th>Created</th><th></th><th></th></tr>
+        {% for run in runs %}
+        <tr data-run-id="{{ run.run_id }}">
+            <td>{{ run.run_id[:8] }}</td>
+            <td>{{ run.solver_type }}</td>
+            <td><span class="status-badge status-{{ run.status }}">{{ run.status }}</span></td>
+            <td>{{ run.created_at }}</td>
+            <td><button type="button" class="btn-view" onclick="selectWorkflowRun('{{ run.run_id }}')">View</button></td>
+            <td><button type="button" class="btn-delete" onclick="deleteWorkflowRun('{{ run.run_id }}')">Delete</button></td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No runs yet.</p>
+    {% endif %}
+    <iframe id="viewerFrame" title="TDGL viewer" style="width:100%;height:760px;border:1px solid #cbd5e1;border-radius:6px;margin-top:1rem;"></iframe>
+</div>
 
 <div id="viewerArea" style="display:none;">
     <h2>Viewer <span id="viewerRunId" style="color:#64748b;font-size:0.9rem;"></span></h2>
@@ -247,10 +267,50 @@
         </div>
         <div id="viewerLoading" class="viewer-loading" style="display:none;">Starting viewer session...</div>
         <div id="viewerError" class="viewer-error" style="display:none;"></div>
-        <iframe id="viewerFrame" style="display:none;" sandbox="allow-scripts allow-same-origin"></iframe>
+        <iframe id="viewerSessionFrame" style="display:none;" sandbox="allow-scripts allow-same-origin"></iframe>
     </div>
 </div>
 <script>
+function selectWorkflowRun(runId) {
+    var frame = document.getElementById("viewerFrame");
+    frame.src = "/tdgl/viewer?run_id=" + encodeURIComponent(runId);
+}
+
+function deleteWorkflowRun(runId) {
+    fetch(basePath + "/api/runs/" + encodeURIComponent(runId), {method: "DELETE"})
+        .then(function(resp) {
+            if (!resp.ok && resp.status !== 204) throw new Error("Delete failed");
+            var row = document.querySelector('#runsTable tr[data-run-id="' + runId + '"]');
+            if (row) row.remove();
+            var frame = document.getElementById("viewerFrame");
+            if (frame.src.indexOf(encodeURIComponent(runId)) !== -1) frame.removeAttribute("src");
+        })
+        .catch(function(err) { alert(err.message); });
+}
+
+(function() {
+    var STATUS_REFRESH = 5000;
+    setInterval(function() {
+        fetch(basePath + "/api/runs")
+            .then(function(r) { return r.json(); })
+            .then(function(runs) {
+                var rows = document.querySelectorAll("#runsTable tr[data-run-id]");
+                rows.forEach(function(row) {
+                    var runId = row.getAttribute("data-run-id");
+                    var match = runs.find(function(r) { return r.run_id === runId; });
+                    if (match) {
+                        var badge = row.querySelector(".status-badge");
+                        if (badge && badge.textContent.trim().toLowerCase() !== match.status) {
+                            badge.textContent = match.status;
+                            badge.className = "status-badge status-" + match.status;
+                        }
+                    }
+                });
+            })
+            .catch(function() {});
+    }, STATUS_REFRESH);
+})();
+
 var viewerManager = (function() {
     var POLL_INITIAL = 2000;
     var POLL_MAX = 16000;
@@ -276,8 +336,8 @@ var viewerManager = (function() {
     }
 
     function hideIframe() {
-        document.getElementById("viewerFrame").style.display = "none";
-        document.getElementById("viewerFrame").src = "";
+        document.getElementById("viewerSessionFrame").style.display = "none";
+        document.getElementById("viewerSessionFrame").src = "";
         document.getElementById("viewerLoading").style.display = "none";
         document.getElementById("viewerError").style.display = "none";
     }
@@ -318,7 +378,7 @@ var viewerManager = (function() {
                 if (data.status === "READY") {
                     setStatus("ready", "Ready");
                     document.getElementById("viewerLoading").style.display = "none";
-                    var frame = document.getElementById("viewerFrame");
+                    var frame = document.getElementById("viewerSessionFrame");
                     frame.src = "/viewer-session/" + sid + "/";
                     frame.style.display = "";
                     clearInterval(pollTimer);
@@ -375,7 +435,7 @@ var viewerManager = (function() {
             if (data.status === "READY") {
                 setStatus("ready", "Ready");
                 document.getElementById("viewerLoading").style.display = "none";
-                var frame = document.getElementById("viewerFrame");
+                var frame = document.getElementById("viewerSessionFrame");
                 frame.src = "/viewer-session/" + data.session_id + "/";
                 frame.style.display = "";
                 startHeartbeat(data.session_id);
