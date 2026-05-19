@@ -1,0 +1,52 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: rectangle-device-builder
+  namespace: tdgl
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: build
+  activeDeadlineSeconds: 300
+  arguments:
+    parameters:
+      - name: run-id
+        value: ""
+      - name: image
+        value: "ghcr.io/fangrh/py-tdgl-runner:312277c"
+      - name: device-params-json
+        value: "{}"
+
+  templates:
+    - name: build
+      outputs:
+        artifacts:
+          - name: mesh
+            path: /data/mesh_meta.json
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
+        command: [python, /app/build_device.py]
+        env:
+          - name: DEVICE_PARAMS
+            value: "{{workflow.parameters.device-params-json}}"
+          - name: DATA_DIR
+            value: "/data"
+        resources:
+          requests:
+            cpu: "1"
+            memory: "1Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        volumeMounts:
+          - name: workdir
+            mountPath: /data
+
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
