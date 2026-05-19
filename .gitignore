@@ -7,3 +7,4 @@ __pycache__/
 .claude/__pycache__/
 /data-viewer/
 bind/
+.worktrees/
