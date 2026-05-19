@@ -1,0 +1,5 @@
+mode: bind-mount
+modules:
+  - cpp-tdgl
+  - tdgl_workflow
+active_since: "2026-05-19"
