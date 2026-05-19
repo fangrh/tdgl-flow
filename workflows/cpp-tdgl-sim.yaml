@@ -13,7 +13,7 @@ spec:
       - name: data-service-url
         value: "http://data-viewer.tdgl.svc.cluster.local"
       - name: image
-        value: "ghcr.io/fangrh/cpp-tdgl-runner:312277c
+        value: "ghcr.io/fangrh/cpp-tdgl-runner:312277c"
       - name: device-params-json
         value: "{}"
       - name: timing-params-json
@@ -52,10 +52,6 @@ spec:
         volumeMounts:
           - name: run-data
             mountPath: /data
-          - name: cpp-tdgl-src
-            mountPath: /src/cpp-tdgl
-          - name: tdgl-workflow-src
-            mountPath: /app/vendor/tdgl_workflow
 
     - name: build-timing-step
       container:
@@ -72,10 +68,6 @@ spec:
         volumeMounts:
           - name: run-data
             mountPath: /data
-          - name: cpp-tdgl-src
-            mountPath: /src/cpp-tdgl
-          - name: tdgl-workflow-src
-            mountPath: /app/vendor/tdgl_workflow
 
     - name: simulate-step
       container:
@@ -103,20 +95,6 @@ spec:
         volumeMounts:
           - name: run-data
             mountPath: /data
-          - name: cpp-tdgl-src
-            mountPath: /src/cpp-tdgl
-          - name: tdgl-workflow-src
-            mountPath: /app/vendor/tdgl_workflow
-
-  volumes:
-    - name: cpp-tdgl-src
-      hostPath:
-        path: /mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/bind/cpp-tdgl
-        type: Directory
-    - name: tdgl-workflow-src
-      hostPath:
-        path: /mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/bind/tdgl_workflow
-        type: Directory
 
   volumeClaimTemplates:
     - metadata:

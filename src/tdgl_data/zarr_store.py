@@ -27,7 +27,7 @@ class ZarrStore:
         run_path.parent.mkdir(parents=True, exist_ok=True)
         group = zarr.open_group(str(run_path), mode="w")
         for field in ("psi_real", "psi_imag", "mu"):
-            group.create_dataset(
+            group.create_array(
                 field,
                 shape=(0, n_sites),
                 dtype="float64",
