@@ -18,6 +18,17 @@ controller:
     - tdgl
   rbac:
     create: true
+  artifactRepository:
+    s3:
+      endpoint: "minio.tdgl.svc.cluster.local:9000"
+      bucket: "argo-artifacts"
+      insecure: true
+      accessKeySecret:
+        name: minio-credentials
+        key: rootUser
+      secretKeySecret:
+        name: minio-credentials
+        key: rootPassword
 
 server:
   enabled: true
