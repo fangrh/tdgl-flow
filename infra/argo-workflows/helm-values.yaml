@@ -4,9 +4,9 @@
 crds:
   install: false
 
-singleNamespace: true
-
 controller:
+  workflowNamespaces:
+    - tdgl
   resources:
     requests:
       cpu: 100m
@@ -14,8 +14,6 @@ controller:
     limits:
       cpu: 500m
       memory: 512Mi
-  workflowNamespaces:
-    - tdgl
   rbac:
     create: true
   artifactRepository:

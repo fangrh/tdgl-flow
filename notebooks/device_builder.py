@@ -180,7 +180,14 @@ def _(argo_refresh, argo_svc, httpx, json, mo, submitted_wf):
 
 
     def _download_artifact(wf_name, artifact_name="mesh-result"):
-        """Download artifact from Argo via its artifact-file API."""
+        """Download artifact from Argo via its artifact-file API.
+
+        Argo stores artifacts as tar.gz archives in S3.
+        """
+        import gzip
+        import tarfile
+        import io
+
         wf = _get_workflow(wf_name)
         nodes = (wf.get("status") or {}).get("nodes") or {}
         node_id = None
@@ -200,7 +207,14 @@ def _(argo_refresh, argo_svc, httpx, json, mo, submitted_wf):
         )
         response = httpx.get(url, verify=False, timeout=15, follow_redirects=True)
         response.raise_for_status()
-        return response.json()
+        raw = response.content
+        # Argo archives artifacts as tar.gz
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                f = tar.extractfile(member)
+                if f:
+                    return json.loads(f.read())
+        return None
 
 
     _ = argo_refresh.value
