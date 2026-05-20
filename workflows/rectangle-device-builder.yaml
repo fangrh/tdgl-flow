@@ -12,7 +12,7 @@ spec:
       - name: run-id
         value: ""
       - name: image
-        value: "ghcr.io/fangrh/py-tdgl-runner:312277c"
+        value: "ghcr.io/fangrh/py-tdgl-runner:580761f"
       - name: device-params-json
         value: "{}"
 
@@ -39,6 +39,12 @@ spec:
         volumeMounts:
           - name: run-data
             mountPath: /data
+      outputs:
+        artifacts:
+          - name: mesh-result
+            path: /data/mesh_result.json
+            s3:
+              key: "{{workflow.parameters.run-id}}/mesh_result.json"
 
   volumeClaimTemplates:
     - metadata:

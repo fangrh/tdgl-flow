@@ -1,4 +1,4 @@
-"""Argo build-device step: generate mesh and write mesh_meta.json.
+"""Argo build-device step: generate mesh and write mesh_result.json as artifact.
 
 Outputs Python tdgl native mesh format for the simulate step.
 """
@@ -32,17 +32,13 @@ def main():
         smooth=device_params.get("smooth", 100),
     )
 
-    # Write mesh_meta.json (Python tdgl native format)
-    meta_path = os.path.join(data_dir, "mesh_meta.json")
-    with open(meta_path, "w") as f:
+    # Write mesh artifact
+    artifact_path = os.path.join(data_dir, "mesh_result.json")
+    with open(artifact_path, "w") as f:
         json.dump(mesh_data, f)
 
     print(f"Device built: {mesh_data['num_sites']} sites, {mesh_data['num_elements']} elements")
-
-    # Output mesh JSON to stdout for consumers (e.g. marimo via pod logs)
-    print("MESH_JSON_START")
-    print(json.dumps(mesh_data))
-    print("MESH_JSON_END")
+    print(f"Artifact written: {artifact_path}")
 
 
 if __name__ == "__main__":
