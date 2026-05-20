@@ -44,8 +44,9 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def connections(WorkflowsService, boto3, mo):
+    gateway = "http://localhost:30080"
     argo_svc = WorkflowsService(
-        host="http://localhost:2746",
+        host=f"{gateway}/argo",
         verify_ssl=False,
         namespace="tdgl",
     )
@@ -57,10 +58,11 @@ def connections(WorkflowsService, boto3, mo):
         region_name="us-east-1",
     )
     mo.md(
-        f"Argo: `{argo_svc.host}`  \n"
-        f"MinIO: `localhost:9000`"
+        f"Gateway: `{gateway}` (Argo + MinIO Console)  \n"
+        f"MinIO S3: `localhost:9000` (direct)  \n"
+        f"Port-forwards: `30080` + `9000`"
     )
-    return (argo_svc, minio)
+    return argo_svc, minio
 
 
 @app.cell
@@ -156,7 +158,7 @@ def _(Parameter, WTR, Workflow, argo_svc, device_form, json, mo, uuid):
         build_status = mo.md("Fill in parameters and click **Build through Argo**.")
 
     build_status
-    return (submitted_run_id, submitted_wf)
+    return submitted_run_id, submitted_wf
 
 
 @app.cell
@@ -167,7 +169,18 @@ def _(mo):
 
 
 @app.cell
-def _(argo_refresh, argo_svc, httpx, io, json, minio, mo, submitted_run_id, submitted_wf, tarfile):
+def _(
+    argo_refresh,
+    argo_svc,
+    httpx,
+    io,
+    json,
+    minio,
+    mo,
+    submitted_run_id,
+    submitted_wf,
+    tarfile,
+):
 
     def _workflow_phase(name):
         url = f"{argo_svc.host}/api/v1/workflows/tdgl/{name}"
