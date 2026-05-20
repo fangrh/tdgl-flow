@@ -32,6 +32,8 @@ controller:
 
 server:
   enabled: true
+  extraArgs:
+    - --auth-mode=server
   service:
     type: ClusterIP
     port: 2746
