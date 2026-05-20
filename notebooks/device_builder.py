@@ -40,7 +40,7 @@ def connections(WorkflowsService, boto3, mo):
     )
     minio = boto3.client(
         "s3",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:30900",
         aws_access_key_id="minioadmin",
         aws_secret_access_key="minioadmin123",
         region_name="us-east-1",

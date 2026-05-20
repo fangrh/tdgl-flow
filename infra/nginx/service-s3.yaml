@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-s3
+  namespace: tdgl
+spec:
+  selector:
+    app: gateway
+  ports:
+    - port: 9000
+      targetPort: 9000
+      nodePort: 30900
+  type: NodePort
