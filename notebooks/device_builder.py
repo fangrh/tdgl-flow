@@ -19,14 +19,26 @@ def _():
     from hera.workflows.models import WorkflowTemplateRef as WTR
 
     return (
-        Parameter, WTR, Workflow, WorkflowsService,
-        boto3, httpx, io, json, mo, np, tarfile, uuid,
+        Parameter,
+        WTR,
+        Workflow,
+        WorkflowsService,
+        boto3,
+        httpx,
+        io,
+        json,
+        mo,
+        np,
+        tarfile,
+        uuid,
     )
 
 
 @app.cell
 def _(mo):
-    mo.md("# Rectangle Device Builder")
+    mo.md("""
+    # Rectangle Device Builder
+    """)
     return
 
 
@@ -34,7 +46,7 @@ def _(mo):
 def connections(WorkflowsService, boto3, mo):
     gateway = "http://localhost:30080"
     argo_svc = WorkflowsService(
-        host=f"{gateway}/argo",
+        host=gateway,
         verify_ssl=False,
         namespace="tdgl",
     )
@@ -49,7 +61,7 @@ def connections(WorkflowsService, boto3, mo):
         f"Gateway: `{gateway}`  —  "
         f"MinIO Console: [`/minio-ui/`]({gateway}/minio-ui/)"
     )
-    return (argo_svc, minio)
+    return argo_svc, minio
 
 
 @app.cell
@@ -85,12 +97,17 @@ def _(mo):
     | probe 1 | {probe1_x} | {probe1_y} |
     | probe 2 | {probe2_x} | {probe2_y} |
     """).batch(
-        film_width=film_width, film_height=film_height,
-        elec_width=elec_width, elec_height=elec_height,
+        film_width=film_width,
+        film_height=film_height,
+        elec_width=elec_width,
+        elec_height=elec_height,
         elec_y_offset=elec_y_offset,
-        max_edge_length=max_edge_length, smooth=smooth,
-        probe1_x=probe1_x, probe1_y=probe1_y,
-        probe2_x=probe2_x, probe2_y=probe2_y,
+        max_edge_length=max_edge_length,
+        smooth=smooth,
+        probe1_x=probe1_x,
+        probe1_y=probe1_y,
+        probe2_x=probe2_x,
+        probe2_y=probe2_y,
     )
     device_form = parameter_batch.form(submit_button_label="Build through Argo")
     device_form
@@ -99,8 +116,6 @@ def _(mo):
 
 @app.cell
 def _(Parameter, WTR, Workflow, argo_svc, device_form, json, mo, uuid):
-    # Build state: persists result keyed by run_id across refresh ticks
-    get_build, set_build = mo.state({"run_id": None, "mesh": None})
 
     submitted_run_id = None
     submitted_wf = None
@@ -135,35 +150,36 @@ def _(Parameter, WTR, Workflow, argo_svc, device_form, json, mo, uuid):
         try:
             _created = _wf.create()
             submitted_wf = _created.metadata.name
-            set_build({"run_id": submitted_run_id, "mesh": None})
-            build_status = mo.md(f"Submitted: `{submitted_wf}`")
+            build_status = mo.md(f"Submitted: `{submitted_wf}`  \nRun ID: `{submitted_run_id}`")
         except Exception as e:
             build_status = mo.md(f"**Submit failed**: `{type(e).__name__}: {e}`")
     else:
         build_status = mo.md("Fill in parameters and click **Build through Argo**.")
 
     build_status
-    return (submitted_run_id, submitted_wf)
+    return submitted_run_id, submitted_wf
 
 
 @app.cell
-def _(mo, submitted_wf):
-    # Auto-refresh: only active when a workflow is running and not yet succeeded
-    if submitted_wf is not None:
-        _poll = mo.ui.refresh(options=[2], default_interval=2, label="Polling...")
-    else:
-        _poll = mo.md("")
-    _poll
-    return (_poll,)
+def _(mo):
+    argo_refresh = mo.ui.refresh(options=[2], default_interval=2, label="Auto-refresh")
+    argo_refresh
+    return (argo_refresh,)
 
 
 @app.cell
 def _(
-    argo_svc, httpx, io, json, minio, mo, submitted_run_id,
-    submitted_wf, tarfile, _poll,
+    argo_refresh,
+    argo_svc,
+    httpx,
+    io,
+    json,
+    minio,
+    mo,
+    submitted_run_id,
+    submitted_wf,
+    tarfile,
 ):
-    # Re-acquire state handle (same key as submit cell)
-    get_build, set_build = mo.state({"run_id": None, "mesh": None})
 
     def _workflow_phase(name):
         url = f"{argo_svc.host}/api/v1/workflows/tdgl/{name}"
@@ -172,73 +188,75 @@ def _(
         wf = resp.json()
         return (wf.get("status") or {}).get("phase") or "Unknown"
 
-    def _read_artifact(run_id):
+
+    def _read_artifact_from_minio(run_id):
+        """Read mesh artifact directly from MinIO by run-id."""
         key = f"{run_id}/mesh_result.json"
         try:
             resp = minio.get_object(Bucket="argo-artifacts", Key=key)
             raw = resp["Body"].read()
         except Exception:
             return None
+        # Argo stores artifacts as tar.gz
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
-            for m in tar.getmembers():
-                f = tar.extractfile(m)
+            for member in tar.getmembers():
+                f = tar.extractfile(member)
                 if f:
                     return json.loads(f.read())
         return None
 
-    def _list_artifacts():
+
+    def _list_minio_artifacts():
+        """List all artifacts in the bucket."""
         resp = minio.list_objects_v2(Bucket="argo-artifacts")
         return [obj["Key"] for obj in resp.get("Contents", [])]
 
-    # --- Consume refresh tick (triggers re-run only when refresh is active) ---
-    try:
-        _ = _poll.value
-    except Exception:
-        pass
 
-    # --- Check cached result ---
-    cached = get_build()
+    _ = argo_refresh.value
+
     minio_mesh_result = None
-
-    if cached["mesh"] is not None:
-        # Already succeeded in a previous tick — show cached result, no API call
-        minio_mesh_result = cached["mesh"]
-        workflow_status = mo.md(
-            f"**Succeeded** — "
-            f"Sites: {minio_mesh_result['num_sites']}, "
-            f"Elements: {minio_mesh_result['num_elements']}"
-        )
-    elif submitted_wf is not None:
-        # Active build — poll Argo status
-        try:
-            _phase = _workflow_phase(str(submitted_wf))
-            if _phase == "Succeeded":
-                minio_mesh_result = _read_artifact(str(submitted_run_id))
-                if minio_mesh_result:
-                    set_build({"run_id": submitted_run_id, "mesh": minio_mesh_result})
-                workflow_status = mo.md(
-                    f"`{submitted_wf}` **succeeded** — "
-                    f"Sites: {minio_mesh_result.get('num_sites')}, "
-                    f"Elements: {minio_mesh_result.get('num_elements')}"
-                ) if minio_mesh_result else mo.md("Succeeded but artifact not in MinIO yet.")
-            elif _phase in {"Failed", "Error"}:
-                workflow_status = mo.md(f"`{submitted_wf}` **{_phase}**")
-            else:
-                _hint = {"Submitted": "Scheduling...", "Pending": "Pulling image...",
-                         "Running": "Computing mesh..."}.get(_phase, "Processing...")
-                workflow_status = mo.md(f"`{submitted_wf}` **{_phase}** — {_hint}")
-        except Exception as e:
-            workflow_status = mo.md(f"Query error: `{type(e).__name__}: {e}`")
-    else:
-        # Idle — list existing artifacts
-        _keys = _list_artifacts()
+    if not submitted_wf:
+        # Show existing artifacts in MinIO
+        _keys = _list_minio_artifacts()
         if _keys:
             workflow_status = mo.md(
-                "MinIO artifacts:\n"
+                "No workflow submitted.  \n"
+                f"MinIO artifacts: {len(_keys)} file(s):\n"
                 + "\n".join(f"- `{k}`" for k in _keys)
             )
         else:
             workflow_status = mo.md("No workflow submitted. MinIO bucket is empty.")
+    else:
+        try:
+            _phase = _workflow_phase(str(submitted_wf))
+
+            if _phase == "Succeeded":
+                minio_mesh_result = _read_artifact_from_minio(str(submitted_run_id))
+                if minio_mesh_result:
+                    workflow_status = mo.md(
+                        f"`{submitted_wf}` **succeeded** (via MinIO).  \n"
+                        f"Sites: {minio_mesh_result.get('num_sites')}, "
+                        f"Elements: {minio_mesh_result.get('num_elements')}"
+                    )
+                else:
+                    workflow_status = mo.md(
+                        f"`{submitted_wf}` succeeded but artifact not in MinIO yet."
+                    )
+            elif _phase in {"Failed", "Error"}:
+                workflow_status = mo.md(
+                    f"`{submitted_wf}` **{_phase}**"
+                )
+            else:
+                _hint = {
+                    "Submitted": "Scheduling pod...",
+                    "Pending": "Pulling image...",
+                    "Running": "Computing mesh...",
+                }.get(_phase, "Processing...")
+                workflow_status = mo.md(
+                    f"`{submitted_wf}` is **{_phase}** — {_hint}"
+                )
+        except Exception as e:
+            workflow_status = mo.md(f"Query error: `{type(e).__name__}: {e}`")
 
     workflow_status
     return (minio_mesh_result,)
@@ -246,6 +264,7 @@ def _(
 
 @app.cell
 def _(minio_mesh_result, mo, np):
+
     mesh_result = minio_mesh_result
 
     if mesh_result is None:
@@ -253,18 +272,20 @@ def _(minio_mesh_result, mo, np):
         elements = np.empty((0, 3), dtype=int)
         terminals = []
         probes = []
-        mesh_summary = mo.md("Waiting for mesh data...")
+        mesh_summary = mo.md("Waiting for MinIO mesh result before plotting.")
     else:
         sites = np.array(mesh_result["sites"])
         elements = np.array(mesh_result["elements"])
         terminals = mesh_result.get("terminals", [])
         probes = mesh_result.get("probe_indices", [])
+
         mesh_summary = mo.md(
-            f"### Mesh\n"
+            f"### Mesh (MinIO artifact)\n"
             f"- **Sites**: {mesh_result['num_sites']}  \n"
             f"- **Elements**: {mesh_result['num_elements']}  \n"
-            f"- **Film**: {mesh_result.get('film_width')} x {mesh_result.get('film_height')}  \n"
-            f"- **Probes**: {probes}"
+            f"- **film_width**: {mesh_result.get('film_width')}  \n"
+            f"- **film_height**: {mesh_result.get('film_height')}  \n"
+            f"- **Probe indices**: {probes}"
         )
     mesh_summary
     return elements, probes, sites, terminals
@@ -285,14 +306,14 @@ def _(elements, mo, probes, sites, terminals):
                 _my += [_p0[1], _p1[1], None]
 
         fig = go.Figure()
+
         fig.add_trace(go.Scatter(
             x=_mx, y=_my, mode="lines",
             line=dict(width=0.3, color="#94a3b8"),
             hoverinfo="skip", showlegend=False,
         ))
 
-        _ec = {"source": ("#2563eb", "rgba(37,99,235,0.35)"),
-               "drain": ("#dc2626", "rgba(220,38,38,0.35)")}
+        _ec = {"source": ("#2563eb", "rgba(37,99,235,0.35)"), "drain": ("#dc2626", "rgba(220,38,38,0.35)")}
         for _t in terminals:
             _idx = _t["site_indices"]
             _x0, _x1 = sites[_idx,0].min(), sites[_idx,0].max()
@@ -317,6 +338,7 @@ def _(elements, mo, probes, sites, terminals):
         _xmin, _xmax = sites[:,0].min(), sites[:,0].max()
         _ymin, _ymax = sites[:,1].min(), sites[:,1].max()
         _m = 0.3
+
         fig.update_layout(
             title=f"Device ({len(sites)} sites, {len(elements)} elements)",
             xaxis=dict(range=[_xmin-_m, _xmax+_m],
@@ -326,10 +348,11 @@ def _(elements, mo, probes, sites, terminals):
                        range=[_ymin-_m, _ymax+_m],
                        showline=True, linewidth=1, linecolor="black",
                        mirror=True, ticks="outside"),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.25,
-                        xanchor="center", x=0.5),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
             margin=dict(l=40, r=10, t=35, b=50),
-            height=280, width=700, plot_bgcolor="white",
+            height=280,
+            width=700,
+            plot_bgcolor="white",
         )
         mesh_plot = fig
     mesh_plot
