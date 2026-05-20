@@ -11,6 +11,9 @@ def _():
     import json
     import uuid
     import httpx
+    import boto3
+    import tarfile
+    import io
 
     from hera.workflows import Workflow, WorkflowsService, Parameter
     from hera.workflows.models import WorkflowTemplateRef as WTR
@@ -20,10 +23,13 @@ def _():
         WTR,
         Workflow,
         WorkflowsService,
+        boto3,
         httpx,
+        io,
         json,
         mo,
         np,
+        tarfile,
         uuid,
     )
 
@@ -37,14 +43,24 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def argo_config(WorkflowsService, mo):
+def connections(WorkflowsService, boto3, mo):
     argo_svc = WorkflowsService(
         host="http://localhost:2746",
         verify_ssl=False,
         namespace="tdgl",
     )
-    mo.md(f"Argo Server: `{argo_svc.host}`")
-    return (argo_svc,)
+    minio = boto3.client(
+        "s3",
+        endpoint_url="http://localhost:9000",
+        aws_access_key_id="minioadmin",
+        aws_secret_access_key="minioadmin123",
+        region_name="us-east-1",
+    )
+    mo.md(
+        f"Argo: `{argo_svc.host}`  \n"
+        f"MinIO: `localhost:9000`"
+    )
+    return (argo_svc, minio)
 
 
 @app.cell
@@ -100,8 +116,8 @@ def _(mo):
 @app.cell
 def _(Parameter, WTR, Workflow, argo_svc, device_form, json, mo, uuid):
 
+    submitted_run_id = None
     submitted_wf = None
-    submitted_params = None
 
     if device_form.value is not None:
         vals = device_form.value
@@ -118,29 +134,29 @@ def _(Parameter, WTR, Workflow, argo_svc, device_form, json, mo, uuid):
             "max_edge_length": vals["max_edge_length"],
             "smooth": int(vals["smooth"]),
         }
-        _run_id = str(uuid.uuid4())
+        submitted_run_id = str(uuid.uuid4())
         _wf = Workflow(
             generate_name="rect-device-",
             namespace="tdgl",
             workflow_template_ref=WTR(name="rectangle-device-builder"),
             arguments=[
-                Parameter(name="run-id", value=_run_id),
+                Parameter(name="run-id", value=submitted_run_id),
                 Parameter(name="device-params-json", value=json.dumps(submitted_params)),
-                Parameter(name="image", value="ghcr.io/fangrh/py-tdgl-runner:580761f"),
+                Parameter(name="image", value="ghcr.io/fangrh/py-tdgl-runner:6262e5a"),
             ],
             workflows_service=argo_svc,
         )
         try:
             _created = _wf.create()
             submitted_wf = _created.metadata.name
-            build_status = mo.md(f"Submitted: `{submitted_wf}`")
+            build_status = mo.md(f"Submitted: `{submitted_wf}`  \nRun ID: `{submitted_run_id}`")
         except Exception as e:
             build_status = mo.md(f"**Submit failed**: `{type(e).__name__}: {e}`")
     else:
         build_status = mo.md("Fill in parameters and click **Build through Argo**.")
 
     build_status
-    return (submitted_wf,)
+    return (submitted_run_id, submitted_wf)
 
 
 @app.cell
@@ -151,64 +167,25 @@ def _(mo):
 
 
 @app.cell
-def _(argo_refresh, argo_svc, httpx, json, mo, submitted_wf):
+def _(argo_refresh, argo_svc, httpx, io, json, minio, mo, submitted_run_id, submitted_wf, tarfile):
 
-    def _workflow_phase(item):
-        status = item.get("status") or {}
-        labels = (item.get("metadata") or {}).get("labels") or {}
-        return status.get("phase") or labels.get("workflows.argoproj.io/phase") or "Unknown"
-
-
-    def _workflow_error_message(item):
-        status = item.get("status") or {}
-        messages = []
-        if status.get("message"):
-            messages.append(status["message"])
-        for node in (status.get("nodes") or {}).values():
-            phase = node.get("phase")
-            message = node.get("message")
-            if phase in {"Failed", "Error"} and message:
-                messages.append(f"{node.get('displayName') or node.get('name')}: {message}")
-        return " | ".join(dict.fromkeys(messages)) or "No failure detail reported by Argo."
-
-
-    def _get_workflow(name):
+    def _workflow_phase(name):
         url = f"{argo_svc.host}/api/v1/workflows/tdgl/{name}"
-        response = httpx.get(url, verify=False, timeout=10)
-        response.raise_for_status()
-        return response.json()
+        resp = httpx.get(url, verify=False, timeout=10)
+        resp.raise_for_status()
+        wf = resp.json()
+        return (wf.get("status") or {}).get("phase") or "Unknown"
 
 
-    def _download_artifact(wf_name, artifact_name="mesh-result"):
-        """Download artifact from Argo via its artifact-file API.
-
-        Argo stores artifacts as tar.gz archives in S3.
-        """
-        import gzip
-        import tarfile
-        import io
-
-        wf = _get_workflow(wf_name)
-        nodes = (wf.get("status") or {}).get("nodes") or {}
-        node_id = None
-        for nid, node in nodes.items():
-            artifacts = (node.get("outputs") or {}).get("artifacts") or []
-            for a in artifacts:
-                if a.get("name") == artifact_name:
-                    node_id = nid
-                    break
-            if node_id:
-                break
-        if not node_id:
+    def _read_artifact_from_minio(run_id):
+        """Read mesh artifact directly from MinIO by run-id."""
+        key = f"{run_id}/mesh_result.json"
+        try:
+            resp = minio.get_object(Bucket="argo-artifacts", Key=key)
+            raw = resp["Body"].read()
+        except Exception:
             return None
-        url = (
-            f"{argo_svc.host}/artifact-files/tdgl/workflows/"
-            f"{wf_name}/{node_id}/outputs/{artifact_name}"
-        )
-        response = httpx.get(url, verify=False, timeout=15, follow_redirects=True)
-        response.raise_for_status()
-        raw = response.content
-        # Argo archives artifacts as tar.gz
+        # Argo stores artifacts as tar.gz
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
             for member in tar.getmembers():
                 f = tar.extractfile(member)
@@ -217,31 +194,45 @@ def _(argo_refresh, argo_svc, httpx, json, mo, submitted_wf):
         return None
 
 
+    def _list_minio_artifacts():
+        """List all artifacts in the bucket."""
+        resp = minio.list_objects_v2(Bucket="argo-artifacts")
+        return [obj["Key"] for obj in resp.get("Contents", [])]
+
+
     _ = argo_refresh.value
 
-    argo_mesh_result = None
+    minio_mesh_result = None
     if not submitted_wf:
-        workflow_status = mo.md("No workflow submitted yet.")
+        # Show existing artifacts in MinIO
+        _keys = _list_minio_artifacts()
+        if _keys:
+            workflow_status = mo.md(
+                "No workflow submitted.  \n"
+                f"MinIO artifacts: {len(_keys)} file(s):\n"
+                + "\n".join(f"- `{k}`" for k in _keys)
+            )
+        else:
+            workflow_status = mo.md("No workflow submitted. MinIO bucket is empty.")
     else:
         try:
-            _workflow = _get_workflow(str(submitted_wf))
-            _phase = _workflow_phase(_workflow)
+            _phase = _workflow_phase(str(submitted_wf))
 
             if _phase == "Succeeded":
-                argo_mesh_result = _download_artifact(str(submitted_wf))
-                if argo_mesh_result:
+                minio_mesh_result = _read_artifact_from_minio(str(submitted_run_id))
+                if minio_mesh_result:
                     workflow_status = mo.md(
-                        f"`{submitted_wf}` **succeeded**.  \n"
-                        f"Sites: {argo_mesh_result.get('num_sites')}, "
-                        f"Elements: {argo_mesh_result.get('num_elements')}"
+                        f"`{submitted_wf}` **succeeded** (via MinIO).  \n"
+                        f"Sites: {minio_mesh_result.get('num_sites')}, "
+                        f"Elements: {minio_mesh_result.get('num_elements')}"
                     )
                 else:
                     workflow_status = mo.md(
-                        f"`{submitted_wf}` succeeded but no artifact found."
+                        f"`{submitted_wf}` succeeded but artifact not in MinIO yet."
                     )
             elif _phase in {"Failed", "Error"}:
                 workflow_status = mo.md(
-                    f"`{submitted_wf}` **{_phase}**: {_workflow_error_message(_workflow)}"
+                    f"`{submitted_wf}` **{_phase}**"
                 )
             else:
                 _hint = {
@@ -256,20 +247,20 @@ def _(argo_refresh, argo_svc, httpx, json, mo, submitted_wf):
             workflow_status = mo.md(f"Query error: `{type(e).__name__}: {e}`")
 
     workflow_status
-    return (argo_mesh_result,)
+    return (minio_mesh_result,)
 
 
 @app.cell
-def _(argo_mesh_result, mo, np):
+def _(minio_mesh_result, mo, np):
 
-    mesh_result = argo_mesh_result
+    mesh_result = minio_mesh_result
 
     if mesh_result is None:
         sites = np.empty((0, 2))
         elements = np.empty((0, 3), dtype=int)
         terminals = []
         probes = []
-        mesh_summary = mo.md("Waiting for Argo mesh result before plotting.")
+        mesh_summary = mo.md("Waiting for MinIO mesh result before plotting.")
     else:
         sites = np.array(mesh_result["sites"])
         elements = np.array(mesh_result["elements"])
@@ -277,7 +268,7 @@ def _(argo_mesh_result, mo, np):
         probes = mesh_result.get("probe_indices", [])
 
         mesh_summary = mo.md(
-            f"### Mesh (Argo workflow result)\n"
+            f"### Mesh (MinIO artifact)\n"
             f"- **Sites**: {mesh_result['num_sites']}  \n"
             f"- **Elements**: {mesh_result['num_elements']}  \n"
             f"- **film_width**: {mesh_result.get('film_width')}  \n"
