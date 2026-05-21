@@ -45,10 +45,6 @@ spec:
             path: /data/device.pkl
             s3:
               key: "{{workflow.parameters.run-id}}/device.pkl"
-          - name: mesh-result
-            path: /data/mesh_result.json
-            s3:
-              key: "{{workflow.parameters.run-id}}/mesh_result.json"
 
   volumeClaimTemplates:
     - metadata:
