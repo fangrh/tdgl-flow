@@ -19,6 +19,7 @@ def main():
             ramp_time=timing_params["ramp_time"],
             stable_time=timing_params["stable_time"],
             save_time=timing_params["save_time"],
+            initial_stable_time=timing_params.get("initial_stable_time"),
         )
     else:
         timing_data = build_timing(

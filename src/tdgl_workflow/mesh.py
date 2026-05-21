@@ -13,7 +13,7 @@ def build_rectangular_device(
     probe_points: list[tuple[float, float]],
     max_edge_length: float,
     smooth: int = 100,
-) -> dict:
+) -> tuple[dict, tdgl.Device]:
     layer = tdgl.Layer(coherence_length=0.5, london_lambda=2.0, thickness=0.1, gamma=1)
 
     film = tdgl.Polygon("film", points=box(film_width, film_height))
@@ -45,7 +45,7 @@ def build_rectangular_device(
     terminal_info = device.terminal_info()
     em = device.mesh.edge_mesh
 
-    return {
+    mesh_data = {
         "sites": points.tolist(),
         "elements": triangles.tolist(),
         "probe_indices": probe_indices,
@@ -95,3 +95,5 @@ def build_rectangular_device(
         "smooth": smooth,
         "probe_points": list(probe_points),
     }
+
+    return mesh_data, device

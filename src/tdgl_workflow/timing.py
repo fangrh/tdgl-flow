@@ -22,6 +22,10 @@ def _build_steps(je_initial, je_final, je_step, ramp_time, stable_time, save_tim
         t = t_offset + i * period
         je_start = je_initial + sign * i * abs(je_step)
         je_end = je_start + sign * abs(je_step)
+        if sign > 0:
+            je_end = min(je_end, je_final)
+        else:
+            je_end = max(je_end, je_final)
         stable_end = t + period
         steps.append({
             "je_start": je_start,
@@ -77,20 +81,47 @@ def build_timing(
     }
 
 
+def _build_equilibration_step(je, stable_time, save_time, t_offset=0.0):
+    save_time = min(save_time, stable_time)
+    return {
+        "je_start": je,
+        "je_end": je,
+        "ramp_start": t_offset,
+        "ramp_end": t_offset,
+        "stable_end": t_offset + stable_time,
+        "save_start": t_offset + stable_time - save_time,
+        "save_end": t_offset + stable_time,
+    }
+
+
 def build_timing_segmented(
     *,
     segments: list[dict],
-    ramp_time: float,
-    stable_time: float,
-    save_time: float,
+    ramp_time: float = 5.0,
+    stable_time: float = 10.0,
+    save_time: float = 5.0,
+    initial_stable_time: float | None = None,
 ) -> dict:
     all_steps = []
     t_offset = 0.0
 
+    # Prepend an equilibration hold at the first segment's je_initial
+    if initial_stable_time is None:
+        initial_stable_time = segments[0].get("stable_time", stable_time)
+    eq_save = min(save_time, initial_stable_time)
+    eq_step = _build_equilibration_step(
+        segments[0]["je_initial"], initial_stable_time, eq_save, t_offset=0.0,
+    )
+    all_steps.append(eq_step)
+    t_offset += initial_stable_time
+
     for seg in segments:
+        seg_ramp = seg.get("ramp_time", ramp_time)
+        seg_stable = seg.get("stable_time", stable_time)
+        seg_save = min(seg.get("save_time", save_time), seg_stable)
         seg_steps, seg_time, _ = _build_steps(
             seg["je_initial"], seg["je_final"], seg["je_step"],
-            ramp_time, stable_time, save_time,
+            seg_ramp, seg_stable, seg_save,
             t_offset=t_offset,
         )
         all_steps.extend(seg_steps)
@@ -103,7 +134,4 @@ def build_timing_segmented(
         "n_steps": len(all_steps),
         "mode": "segmented",
         "segments": segments,
-        "ramp_time": ramp_time,
-        "stable_time": stable_time,
-        "save_time": save_time,
     }

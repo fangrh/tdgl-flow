@@ -153,8 +153,9 @@ jobs:
           if [ "${{ steps.changes.outputs.build_py_runner }}" = "true" ]; then
             sed -i "s|image: ghcr.io/fangrh/py-tdgl-runner:.*|image: ghcr.io/fangrh/py-tdgl-runner:$SHA|" services/py-tdgl-runner/k8s/deployment.yaml
             sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" workflows/py-tdgl-sim.yaml
+            sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" workflows/rectangle-device-builder.yaml
             echo "Updated py-tdgl-runner tag to $SHA"
           fi
-          git add services/data-viewer/k8s/deployment.yaml services/py-tdgl-runner/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml services/viewer-manager/k8s/deployment.yaml services/viewer-manager/k8s/migrate-job.yaml workflows/cpp-tdgl-sim.yaml workflows/py-tdgl-sim.yaml
+          git add services/data-viewer/k8s/deployment.yaml services/py-tdgl-runner/k8s/deployment.yaml services/tdgl-workflow/k8s/deployment.yaml services/viewer-manager/k8s/deployment.yaml services/viewer-manager/k8s/migrate-job.yaml workflows/cpp-tdgl-sim.yaml workflows/py-tdgl-sim.yaml workflows/rectangle-device-builder.yaml
           git diff --cached --quiet || git commit -m "ci: update image tags to $SHA"
           git push

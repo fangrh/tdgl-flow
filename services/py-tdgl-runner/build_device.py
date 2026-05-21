@@ -1,9 +1,10 @@
-"""Argo build-device step: generate mesh and write mesh_result.json as artifact.
+"""Argo build-device step: generate mesh and write device artifact.
 
-Outputs Python tdgl native mesh format for the simulate step.
+Outputs both mesh_result.json (metadata) and device.pkl (pickled tdgl.Device).
 """
 import json
 import os
+import pickle
 import sys
 
 sys.path.insert(0, "/app/vendor")
@@ -21,7 +22,7 @@ def main():
     data_dir = os.environ.get("DATA_DIR", "/data")
     os.makedirs(data_dir, exist_ok=True)
 
-    mesh_data = build_rectangular_device(
+    mesh_data, device = build_rectangular_device(
         film_width=device_params["film_width"],
         film_height=device_params["film_height"],
         elec_width=device_params["elec_width"],
@@ -32,13 +33,18 @@ def main():
         smooth=device_params.get("smooth", 100),
     )
 
-    # Write mesh artifact
-    artifact_path = os.path.join(data_dir, "mesh_result.json")
-    with open(artifact_path, "w") as f:
+    # Write pickled Device (for simulation)
+    device_path = os.path.join(data_dir, "device.pkl")
+    with open(device_path, "wb") as f:
+        pickle.dump(device, f)
+
+    # Write mesh metadata (for plotting / backward compat)
+    metadata_path = os.path.join(data_dir, "mesh_result.json")
+    with open(metadata_path, "w") as f:
         json.dump(mesh_data, f)
 
     print(f"Device built: {mesh_data['num_sites']} sites, {mesh_data['num_elements']} elements")
-    print(f"Artifact written: {artifact_path}")
+    print(f"Artifacts: {device_path}, {metadata_path}")
 
 
 if __name__ == "__main__":

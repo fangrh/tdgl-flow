@@ -41,6 +41,10 @@ spec:
             mountPath: /data
       outputs:
         artifacts:
+          - name: device
+            path: /data/device.pkl
+            s3:
+              key: "{{workflow.parameters.run-id}}/device.pkl"
           - name: mesh-result
             path: /data/mesh_result.json
             s3:
