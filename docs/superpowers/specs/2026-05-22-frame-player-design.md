@@ -116,14 +116,16 @@ State:
 - `_latest: int` — latest available frame index (updated by poller)
 - `_timer: threading.Timer | None` — tick scheduler
 - `_poller: threading.Timer | None` — new-frame poller
+- `_vmin: float` — colormap minimum (default 0.0)
+- `_vmax: float` — colormap maximum (default 1.05)
 
 #### Rendering pipeline
 
 ```python
-from matplotlib import cm
+import matplotlib as mpl
 
 # Init: build colormap LUT once
-self._cmap = cm.get_cmap('inferno')
+self._cmap = mpl.colormaps['inferno']
 
 # Per-frame render:
 def _render(self):
@@ -138,12 +140,24 @@ def _render(self):
 
 No matplotlib figures. No `draw()`. No `draw_idle()`. No `IOLoop.add_callback()`. Single `put_image_data()` call per frame.
 
+#### Canvas sizing
+
+Data grid is `(ny, nx)` (e.g. 50x100). Canvas pixel size must match to avoid scaling artifacts. Use `Canvas(width=nx, height=ny)` and let the `layout` dict scale it via CSS:
+
+```python
+self.canvas = Canvas(width=NX, height=NY,
+                     layout=Layout(width='100%', max_width='700px'))
+```
+
+This renders at native data resolution and CSS-scales the display to ~700px wide with correct aspect ratio. No upsampling needed.
+
 #### Widget setup
 
 ```python
 from ipycanvas import Canvas
 
-self.canvas = Canvas(width=700, height=350)
+self.canvas = Canvas(width=NX, height=NY,
+                     layout=Layout(width='100%', max_width='700px'))
 self.btn = ToggleButton(description='▶', layout=Layout(width='50px'))
 self.slider = IntSlider(min=0, max=total-1, continuous_update=False,
                          layout=Layout(flex='1', min_width='300px'))
@@ -156,9 +170,10 @@ No `new_figure_manager_given_figure`. No matplotlib Figure. Pure ipycanvas + ipy
 #### Tick loop
 
 ```python
-def _schedule_tick(self):
+def _schedule_tick(self, delay=None):
     if self._timer: self._timer.cancel()
-    self._timer = threading.Timer(self._interval, self._tick)
+    d = delay if delay is not None else self._interval
+    self._timer = threading.Timer(d, self._tick)
     self._timer.daemon = True
     self._timer.start()
 
@@ -168,7 +183,7 @@ def _tick(self):
     if next_idx >= self.source.total_frames:
         self.pause(); return
     if not self.source.frame_exists(next_idx):
-        self._schedule_retry(0.2); return
+        self._schedule_tick(delay=0.2); return
     self._current = next_idx
     self._render()
     self._schedule_tick()
@@ -217,7 +232,7 @@ Widgets:
 - `ToggleButton`: play/pause (unicode arrow/bar icons)
 - `IntSlider`: progress bar, `min=0`, `max=total_frames-1`, `continuous_update=False`
 - `Label`: frame counter `"120 / 3376"`
-- `Canvas`: ipycanvas, 700x350 px
+- `Canvas`: ipycanvas, native data resolution (NX x NY), CSS-scaled to max 700px wide
 - Layout: `VBox([HBox([btn, slider, label]), canvas])`
 
 ## Notebook Structure
