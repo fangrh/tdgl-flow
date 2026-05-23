@@ -12,7 +12,7 @@ spec:
       - name: run-id
         value: ""
       - name: image
-        value: "ghcr.io/fangrh/py-tdgl-runner:213c6bd"
+        value: "ghcr.io/fangrh/py-tdgl-runner:b01dad9"
       - name: device-params-json
         value: "{}"
 
