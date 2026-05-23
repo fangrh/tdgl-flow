@@ -128,3 +128,113 @@ def test_pipeline_download_raises_when_missing(pipeline):
     with patch.object(pipeline.store, "download_h5", return_value=None):
         with pytest.raises(FileNotFoundError, match="test-run-id"):
             pipeline.download("test-run-id")
+
+
+def test_pipeline_verify_returns_report(pipeline, tmp_path):
+    """verify() calls examine_h5 + debug_player and returns combined report."""
+    import numpy as np
+    import h5py
+
+    h5_path = str(tmp_path / "test.h5")
+    n_sites = 20
+    n_edges = 10
+    with h5py.File(h5_path, "w") as f:
+        mesh = f.create_group("solution/device/mesh")
+        mesh.create_dataset("sites", data=np.random.rand(n_sites, 2))
+        mesh.create_dataset("edge_mesh/edges", data=np.zeros((n_edges, 2), dtype=int))
+        mesh.create_dataset("edge_mesh/directions", data=np.random.rand(n_edges, 2))
+        mesh.create_dataset("edge_mesh/dual_edge_lengths", data=np.random.rand(n_edges))
+        data = f.create_group("data")
+        for i in range(5):
+            g = data.create_group(str(i))
+            g.attrs["time"] = float(i) * 0.5
+            g.create_dataset("psi", data=np.random.rand(n_sites))
+            g.create_dataset("mu", data=np.random.randn(n_sites) * 0.5)
+            g.create_dataset("normal_current", data=np.random.randn(n_edges) * 0.1)
+            g.create_dataset("supercurrent", data=np.random.randn(n_edges) * 0.1)
+
+    report = pipeline.verify(h5_path)
+
+    assert "examine" in report
+    assert "debug" in report
+    assert "healthy" in report
+    assert report["examine"]["healthy"] is True
+    assert report["debug"]["passed"] is True
+
+
+def test_pipeline_verify_detects_problems(pipeline, tmp_path):
+    """verify() reports problems in unhealthy files."""
+    import numpy as np
+    import h5py
+
+    h5_path = str(tmp_path / "bad.h5")
+    with h5py.File(h5_path, "w") as f:
+        mesh = f.create_group("solution/device/mesh")
+        mesh.create_dataset("sites", data=np.random.rand(10, 2))
+        mesh.create_dataset("edge_mesh/edges", data=np.zeros((5, 2), dtype=int))
+        mesh.create_dataset("edge_mesh/directions", data=np.random.rand(5, 2))
+        mesh.create_dataset("edge_mesh/dual_edge_lengths", data=np.random.rand(5))
+        data = f.create_group("data")
+        g = data.create_group("0")
+        g.attrs["time"] = 0.0
+        psi = np.array([1.0, float("nan"), 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+        g.create_dataset("psi", data=psi)
+        g.create_dataset("mu", data=np.zeros(10))
+        g.create_dataset("normal_current", data=np.random.randn(5))
+        g.create_dataset("supercurrent", data=np.random.randn(5))
+
+    report = pipeline.verify(h5_path)
+
+    assert report["healthy"] is False
+    assert report["examine"]["healthy"] is False
+    assert report["debug"]["passed"] is False
+
+
+def test_pipeline_run_full_flow(pipeline, device_params, timing_params, solver_options, tmp_path):
+    """run() submits, polls, downloads, verifies — all steps in sequence."""
+    import numpy as np
+    import h5py
+
+    mock_wf = MagicMock()
+    mock_wf.create.return_value = MagicMock(
+        metadata=MagicMock(name="test-wf")
+    )
+
+    mock_poll_resp = MagicMock()
+    mock_poll_resp.status_code = 200
+    mock_poll_resp.json.return_value = {"status": {"phase": "Succeeded"}}
+
+    h5_path = str(tmp_path / "tdgl-test-run.h5")
+    n_sites = 20
+    n_edges = 10
+    with h5py.File(h5_path, "w") as f:
+        mesh = f.create_group("solution/device/mesh")
+        mesh.create_dataset("sites", data=np.random.rand(n_sites, 2))
+        mesh.create_dataset("edge_mesh/edges", data=np.zeros((n_edges, 2), dtype=int))
+        mesh.create_dataset("edge_mesh/directions", data=np.random.rand(n_edges, 2))
+        mesh.create_dataset("edge_mesh/dual_edge_lengths", data=np.random.rand(n_edges))
+        data = f.create_group("data")
+        for i in range(3):
+            g = data.create_group(str(i))
+            g.attrs["time"] = float(i)
+            g.create_dataset("psi", data=np.random.rand(n_sites))
+            g.create_dataset("mu", data=np.random.randn(n_sites))
+            g.create_dataset("normal_current", data=np.random.randn(n_edges))
+            g.create_dataset("supercurrent", data=np.random.randn(n_edges))
+
+    with patch("hera.workflows.Workflow", return_value=mock_wf), \
+         patch("httpx.get", return_value=mock_poll_resp), \
+         patch.object(pipeline.store, "download_h5", return_value=h5_path), \
+         patch.object(pipeline.store, "get_run", return_value={"status": "completed", "n_frames": 3}):
+
+        result = pipeline.run(
+            device_params=device_params,
+            timing_params=timing_params,
+            solver_options=solver_options,
+        )
+
+    assert result["phase"] == "Succeeded"
+    assert result["h5_path"] == h5_path
+    assert result["report"]["healthy"] is True
+    assert "run_id" in result
+    assert "wf_name" in result

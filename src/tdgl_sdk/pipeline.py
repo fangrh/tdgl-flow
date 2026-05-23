@@ -119,3 +119,76 @@ class SimulationPipeline:
         if h5_path is None:
             raise FileNotFoundError(f"No HDF5 found for run {run_id}")
         return h5_path
+
+    def verify(self, h5_path: str) -> dict:
+        """Run examine_h5 + debug_player on an HDF5 file. Returns combined report."""
+        from tdgl_sdk.viewer.diagnostics import examine_h5, format_report
+        from tdgl_sdk.viewer._player import debug_player
+
+        examine_report = examine_h5(h5_path)
+        debug_result = debug_player(h5_path)
+
+        healthy = examine_report["healthy"] and debug_result["passed"]
+
+        return {
+            "healthy": healthy,
+            "examine": examine_report,
+            "examine_text": format_report(examine_report),
+            "debug": debug_result,
+            "summary": (
+                f"Healthy: {healthy}, "
+                f"Frames: {examine_report['frames']['total']}, "
+                f"Issues: {examine_report['issues'] or 'none'}, "
+                f"Player test: {'passed' if debug_result['passed'] else 'failed'} "
+                f"({len(debug_result['errors'])} errors)"
+            ),
+        }
+
+    def run(
+        self,
+        device_params: dict,
+        timing_params: dict,
+        solver_options: dict | None = None,
+        cpu: str = "2",
+        memory: str = "4Gi",
+        poll_timeout: int = 600,
+    ) -> dict:
+        """Full pipeline: submit -> poll -> download -> verify.
+
+        Returns dict with: run_id, wf_name, phase, h5_path, manifest, report.
+        """
+        print("Step 1: Submitting simulation workflow...")
+        run_id, wf_name = self.submit(
+            device_params=device_params,
+            timing_params=timing_params,
+            solver_options=solver_options,
+            cpu=cpu,
+            memory=memory,
+        )
+        print(f"  Run ID: {run_id}, Workflow: {wf_name}")
+
+        print("Step 2: Polling workflow...")
+        phase = self.poll(wf_name, timeout=poll_timeout)
+        print(f"  Phase: {phase}")
+
+        print("Step 3: Checking manifest...")
+        manifest = self.store.get_run(run_id)
+        if manifest is None:
+            raise FileNotFoundError(f"No manifest for run {run_id}")
+
+        print("Step 4: Downloading HDF5 result...")
+        h5_path = self.download(run_id)
+        print(f"  Downloaded to: {h5_path}")
+
+        print("Step 5: Verifying data integrity...")
+        report = self.verify(h5_path)
+        print(f"  {report['summary']}")
+
+        return {
+            "run_id": run_id,
+            "wf_name": wf_name,
+            "phase": phase,
+            "h5_path": h5_path,
+            "manifest": manifest,
+            "report": report,
+        }
