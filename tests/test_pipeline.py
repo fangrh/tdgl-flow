@@ -238,3 +238,16 @@ def test_pipeline_run_full_flow(pipeline, device_params, timing_params, solver_o
     assert result["report"]["healthy"] is True
     assert "run_id" in result
     assert "wf_name" in result
+
+
+def test_pipeline_watch_live_returns_streaming_player(pipeline):
+    """watch_live() creates a StreamingTDGLPlayer for a run."""
+    mock_store = MagicMock()
+
+    with patch.object(pipeline, "store", mock_store):
+        player = pipeline.watch_live("test-run-id", poll_interval=5)
+
+    from tdgl_sdk.viewer._player import StreamingTDGLPlayer
+    assert isinstance(player, StreamingTDGLPlayer)
+    assert player.run_id == "test-run-id"
+    player.stop()

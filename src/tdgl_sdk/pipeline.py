@@ -192,3 +192,20 @@ class SimulationPipeline:
             "manifest": manifest,
             "report": report,
         }
+
+    def watch_live(
+        self,
+        run_id: str,
+        poll_interval: int = 15,
+    ):
+        """Create a streaming viewer for a running simulation.
+
+        The viewer polls MinIO for new frames and auto-updates.
+        Returns a StreamingTDGLPlayer (call .display_player() in Jupyter).
+        """
+        from tdgl_sdk.viewer._player import watch_run
+        return watch_run(
+            self.store, run_id,
+            poll_interval=poll_interval,
+            argo_host=self.argo_url,
+        )
