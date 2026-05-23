@@ -199,7 +199,8 @@ def format_report(report: dict) -> str:
     """Format the diagnostic report as a human/agent-readable string."""
     lines = []
     lines.append(f"HDF5 Diagnostic: {report['file']['path']}")
-    lines.append(f"  Size: {report['file']['size_mb']:.2f} MB")
+    size = report['file']['size_mb']
+    lines.append(f"  Size: {size:.2f} MB" if size is not None else "  Size: (remote file)")
     lines.append(f"  Top keys: {report['file']['top_keys']}")
 
     mesh = report["mesh"]
