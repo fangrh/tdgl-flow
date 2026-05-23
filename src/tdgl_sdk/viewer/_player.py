@@ -383,3 +383,178 @@ def watch_run(store, run_id: str, poll_interval: int = 15, argo_host: str | None
     """Create a streaming player that watches a running simulation in MinIO."""
     player = StreamingTDGLPlayer(store, run_id, poll_interval, argo_host=argo_host)
     return player
+
+
+def debug_player(h5_path: str, seed: int = 42) -> dict:
+    """Automated smoke test for the viewer player.
+
+    Simulates human interaction: play, random seek, pause, stop.
+    Checks frame data and I-V at each step.
+    Returns a structured result dict for the agent — no visual output.
+
+    Returns:
+        {
+            "passed": bool,
+            "h5_path": str,
+            "total_frames": int,
+            "steps": [
+                {"action": "play", "ok": true, "status": {...}},
+                {"action": "seek", "frame": 42, "ok": true, "frame_data": {...}},
+                ...
+            ],
+            "errors": [str, ...],  # only if passed=False
+        }
+
+    Usage:
+        from tdgl_sdk.viewer import debug_player
+        result = debug_player("sim_output.h5")
+        if not result["passed"]:
+            for e in result["errors"]:
+                print(e)
+    """
+    import random
+
+    import numpy as np
+
+    rng = random.Random(seed)
+    steps = []
+    errors = []
+
+    try:
+        player = create_player(h5_path)
+    except Exception as exc:
+        return {
+            "passed": False,
+            "h5_path": h5_path,
+            "total_frames": 0,
+            "steps": [],
+            "errors": [f"create_player failed: {exc}"],
+        }
+
+    total = player.total
+
+    # Step 1: check initial state
+    status = player.get_status()
+    step = {"action": "init", "ok": True, "status": status}
+    if status["total_frames"] == 0:
+        step["ok"] = False
+        step["error"] = "No frames in HDF5"
+        errors.append("No frames in HDF5")
+    if status["playing"]:
+        step["ok"] = False
+        step["error"] = "Player should not be playing at init"
+        errors.append("Player should not be playing at init")
+    steps.append(step)
+
+    if total == 0:
+        player.iv_cache.stop()
+        return {"passed": False, "h5_path": h5_path, "total_frames": 0, "steps": steps, "errors": errors}
+
+    # Step 2: play for a few frames
+    try:
+        player.play()
+        time.sleep(min(0.5, total * 0.05))  # let it run a bit
+        player.pause()
+        status = player.get_status()
+        step = {"action": "play_pause", "ok": True, "status": status}
+        if not status["playing"] is False:
+            step["ok"] = False
+            step["error"] = "Player still playing after pause"
+            errors.append("Player still playing after pause")
+        steps.append(step)
+    except Exception as exc:
+        steps.append({"action": "play_pause", "ok": False, "error": str(exc)})
+        errors.append(f"play/pause failed: {exc}")
+
+    # Step 3: random seeks — like clicking the progress bar
+    seek_indices = _pick_seek_targets(total, rng, n=4)
+    for idx in seek_indices:
+        try:
+            player.show(idx)
+            frame_data = player.get_frame_data(idx)
+            status = player.get_status()
+            ok = True
+            seek_errors = []
+            if status["current_frame"] != idx:
+                ok = False
+                seek_errors.append(f"Expected frame {idx}, got {status['current_frame']}")
+            if frame_data.get("psi_nan", 0) > 0:
+                ok = False
+                seek_errors.append(f"Frame {idx} has {frame_data['psi_nan']} NaN in psi")
+            if not frame_data.get("psi_present", False):
+                ok = False
+                seek_errors.append(f"Frame {idx} missing psi dataset")
+            if not ok:
+                errors.extend(seek_errors)
+            steps.append({
+                "action": "seek",
+                "frame": idx,
+                "ok": ok,
+                "error": "; ".join(seek_errors) if seek_errors else None,
+                "frame_data": frame_data,
+                "status": status,
+            })
+        except Exception as exc:
+            steps.append({"action": "seek", "frame": idx, "ok": False, "error": str(exc)})
+            errors.append(f"seek to frame {idx} failed: {exc}")
+
+    # Step 4: check I-V data
+    try:
+        iv = player.get_iv_data()
+        ok = True
+        iv_errors = []
+        if iv["n_points"] == 0:
+            ok = False
+            iv_errors.append("I-V cache is empty")
+        for name in ("I", "V", "t"):
+            if name not in iv or len(iv[name]) == 0:
+                ok = False
+                iv_errors.append(f"I-V missing {name} data")
+        if not ok:
+            errors.extend(iv_errors)
+        steps.append({
+            "action": "check_iv",
+            "ok": ok,
+            "error": "; ".join(iv_errors) if iv_errors else None,
+            "n_points": iv["n_points"],
+            "I_range": iv["I_range"],
+            "V_range": iv["V_range"],
+        })
+    except Exception as exc:
+        steps.append({"action": "check_iv", "ok": False, "error": str(exc)})
+        errors.append(f"I-V check failed: {exc}")
+
+    # Step 5: stop (rewind to frame 0)
+    try:
+        player.stop()
+        status = player.get_status()
+        ok = status["current_frame"] == 0
+        if not ok:
+            errors.append(f"Stop did not rewind: frame={status['current_frame']}")
+        steps.append({"action": "stop", "ok": ok, "status": status})
+    except Exception as exc:
+        steps.append({"action": "stop", "ok": False, "error": str(exc)})
+        errors.append(f"stop failed: {exc}")
+
+    # Cleanup
+    player.iv_cache.stop()
+
+    return {
+        "passed": len(errors) == 0,
+        "h5_path": h5_path,
+        "total_frames": total,
+        "steps": steps,
+        "errors": errors,
+    }
+
+
+def _pick_seek_targets(total, rng, n=4):
+    """Pick n random frame indices spread across the file."""
+    if total <= n + 1:
+        return list(range(total))
+    targets = set()
+    targets.add(0)
+    targets.add(total - 1)
+    while len(targets) < min(n, total):
+        targets.add(rng.randint(1, total - 2))
+    return sorted(targets)

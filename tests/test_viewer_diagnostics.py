@@ -238,3 +238,71 @@ def test_player_seek_and_status(tmp_path):
     assert status["playing"] is False
 
     player.iv_cache.stop()
+
+
+# ── debug_player smoke test ──────────────────────────────────────────
+
+def test_debug_player_passes(tmp_path):
+    h5_path = tmp_path / "player.h5"
+    _write_player_h5(h5_path, n_frames=10)
+
+    from tdgl_sdk.viewer._player import debug_player
+    result = debug_player(str(h5_path), seed=7)
+
+    assert result["passed"] is True
+    assert result["total_frames"] == 10
+    assert result["errors"] == []
+    assert len(result["steps"]) >= 5  # init, play_pause, 4 seeks, iv, stop
+
+    # Check step actions
+    actions = [s["action"] for s in result["steps"]]
+    assert "init" in actions
+    assert "play_pause" in actions
+    assert "seek" in actions
+    assert "check_iv" in actions
+    assert "stop" in actions
+
+    # All steps should be ok
+    for step in result["steps"]:
+        assert step["ok"], f"Step {step['action']} failed: {step.get('error')}"
+
+
+def test_debug_player_detects_no_frames(tmp_path):
+    h5_path = tmp_path / "empty.h5"
+    _write_empty_data_h5(h5_path)
+
+    from tdgl_sdk.viewer._player import debug_player
+    result = debug_player(str(h5_path))
+
+    assert result["passed"] is False
+    assert len(result["errors"]) > 0  # fails because can't load mesh from empty file
+
+
+def _write_nans_with_mesh_h5(path: Path) -> None:
+    n_sites = 10
+    with h5py.File(path, "w") as f:
+        mesh = f.create_group("solution/device/mesh")
+        mesh.create_dataset("sites", data=np.random.rand(n_sites, 2))
+        mesh.create_dataset("edge_mesh/edges", data=np.zeros((5, 2), dtype=int))
+        mesh.create_dataset("edge_mesh/directions", data=np.random.rand(5, 2))
+        mesh.create_dataset("edge_mesh/dual_edge_lengths", data=np.random.rand(5))
+
+        data = f.create_group("data")
+        g = data.create_group("0")
+        g.attrs["time"] = 0.0
+        psi = np.array([1.0, float("nan"), 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+        g.create_dataset("psi", data=psi)
+        g.create_dataset("mu", data=np.zeros(n_sites))
+        g.create_dataset("normal_current", data=np.random.randn(5))
+        g.create_dataset("supercurrent", data=np.random.randn(5))
+
+
+def test_debug_player_detects_nans(tmp_path):
+    h5_path = tmp_path / "nans.h5"
+    _write_nans_with_mesh_h5(h5_path)
+
+    from tdgl_sdk.viewer._player import debug_player
+    result = debug_player(str(h5_path))
+
+    assert result["passed"] is False
+    assert any("NaN" in e for e in result["errors"])
