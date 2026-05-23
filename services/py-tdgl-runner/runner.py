@@ -78,21 +78,26 @@ def main() -> None:
             mesh_meta = json.load(f)
 
     steps = timing_data["steps"] + timing_data.get("ramp_down_steps", [])
-    times = [s["stable_end"] for s in steps]
-    je_values = [s["je_end"] for s in steps]
-    terminal_currents_list = [{"source": je, "drain": -je} for je in je_values]
 
-    scenario = tdgl.SweepScenario(
-        times=times,
-        terminal_currents=terminal_currents_list,
-    )
+    def get_terminal_currents(t):
+        for step in steps:
+            if t < step["ramp_start"]:
+                continue
+            ramp_duration = step["ramp_end"] - step["ramp_start"]
+            if ramp_duration > 0 and t <= step["ramp_end"]:
+                frac = (t - step["ramp_start"]) / ramp_duration
+                je = step["je_start"] + frac * (step["je_end"] - step["je_start"])
+                return {"source": je, "drain": -je}
+            if t <= step["stable_end"]:
+                return {"source": step["je_end"], "drain": -step["je_end"]}
+        return {"source": 0.0, "drain": 0.0}
 
     output_path = os.path.join(DATA_DIR, "output.h5")
 
     options = tdgl.SolverOptions(
         solve_time=timing_data["solve_time"],
-        dt=solver_options.get("dt", 1e-6),
-        max_dt=solver_options.get("max_dt", 0.1),
+        dt_init=solver_options.get("dt_init", 1e-6),
+        dt_max=solver_options.get("dt_max", 0.1),
         adaptive=solver_options.get("adaptive", True),
         save_every=solver_options.get("save_every", 100),
         output_file=output_path,
@@ -132,9 +137,8 @@ def main() -> None:
     try:
         solution = tdgl.solve(
             device,
-            scenario,
             options,
-            checkpoint_path=os.path.join(DATA_DIR, "checkpoint.zarr"),
+            terminal_currents=get_terminal_currents,
         )
 
         # Stop periodic upload, do final upload
