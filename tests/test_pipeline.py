@@ -251,3 +251,35 @@ def test_pipeline_watch_live_returns_streaming_player(pipeline):
     assert isinstance(player, StreamingTDGLPlayer)
     assert player.run_id == "test-run-id"
     player.stop()
+
+
+def test_verify_run_standalone_function(tmp_path):
+    """Module-level verify_run() works without a pipeline instance."""
+    import numpy as np
+    import h5py
+
+    h5_path = str(tmp_path / "standalone.h5")
+    n_sites = 20
+    n_edges = 10
+    with h5py.File(h5_path, "w") as f:
+        mesh = f.create_group("solution/device/mesh")
+        mesh.create_dataset("sites", data=np.random.rand(n_sites, 2))
+        mesh.create_dataset("edge_mesh/edges", data=np.zeros((n_edges, 2), dtype=int))
+        mesh.create_dataset("edge_mesh/directions", data=np.random.rand(n_edges, 2))
+        mesh.create_dataset("edge_mesh/dual_edge_lengths", data=np.random.rand(n_edges))
+        data = f.create_group("data")
+        for i in range(3):
+            g = data.create_group(str(i))
+            g.attrs["time"] = float(i)
+            g.create_dataset("psi", data=np.random.rand(n_sites))
+            g.create_dataset("mu", data=np.random.randn(n_sites))
+            g.create_dataset("normal_current", data=np.random.randn(n_edges))
+            g.create_dataset("supercurrent", data=np.random.randn(n_edges))
+
+    from tdgl_sdk.pipeline import verify_run
+    report = verify_run(h5_path)
+
+    assert report["healthy"] is True
+    assert report["examine"]["frames"]["total"] == 3
+    assert report["debug"]["passed"] is True
+    assert isinstance(report["summary"], str)

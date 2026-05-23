@@ -209,3 +209,32 @@ class SimulationPipeline:
             poll_interval=poll_interval,
             argo_host=self.argo_url,
         )
+
+
+def verify_run(h5_path: str) -> dict:
+    """Convenience function: examine + debug a single HDF5 file.
+
+    Agents can call this without constructing a SimulationPipeline.
+    Returns the same dict as SimulationPipeline.verify().
+    """
+    from tdgl_sdk.viewer.diagnostics import examine_h5, format_report
+    from tdgl_sdk.viewer._player import debug_player
+
+    examine_report = examine_h5(h5_path)
+    debug_result = debug_player(h5_path)
+
+    healthy = examine_report["healthy"] and debug_result["passed"]
+
+    return {
+        "healthy": healthy,
+        "examine": examine_report,
+        "examine_text": format_report(examine_report),
+        "debug": debug_result,
+        "summary": (
+            f"Healthy: {healthy}, "
+            f"Frames: {examine_report['frames']['total']}, "
+            f"Issues: {examine_report['issues'] or 'none'}, "
+            f"Player test: {'passed' if debug_result['passed'] else 'failed'} "
+            f"({len(debug_result['errors'])} errors)"
+        ),
+    }
