@@ -252,7 +252,7 @@ def test_debug_player_passes(tmp_path):
     assert result["passed"] is True
     assert result["total_frames"] == 10
     assert result["errors"] == []
-    assert len(result["steps"]) >= 5  # init, play_pause, 4 seeks, iv, stop
+    assert len(result["steps"]) >= 7  # init, play_pause, 4 seeks, iv, seek_beyond, stop
 
     # Check step actions
     actions = [s["action"] for s in result["steps"]]
@@ -260,11 +260,17 @@ def test_debug_player_passes(tmp_path):
     assert "play_pause" in actions
     assert "seek" in actions
     assert "check_iv" in actions
+    assert "seek_beyond" in actions
     assert "stop" in actions
 
     # All steps should be ok
     for step in result["steps"]:
         assert step["ok"], f"Step {step['action']} failed: {step.get('error')}"
+
+    # Verify seek_beyond snapped to latest available frame
+    beyond_step = next(s for s in result["steps"] if s["action"] == "seek_beyond")
+    assert beyond_step["landed_on"] == 9  # last frame in a 10-frame file
+    assert beyond_step["requested"] == 60  # total(10) + 50
 
 
 def test_debug_player_detects_no_frames(tmp_path):
@@ -306,3 +312,60 @@ def test_debug_player_detects_nans(tmp_path):
 
     assert result["passed"] is False
     assert any("NaN" in e for e in result["errors"])
+
+
+# ── Live mode tests: seek beyond available frames ─────────────────────
+
+def test_live_mode_seek_beyond_snaps_to_latest(tmp_path):
+    """Seek to frame 100 when only 5 exist — should land on frame 4."""
+    h5_path = tmp_path / "live.h5"
+    _write_player_h5(h5_path, n_frames=5)
+
+    from tdgl_sdk.viewer._player import create_player
+    player = create_player(str(h5_path), live=True)
+
+    assert player.live is True
+
+    # Seek far beyond available
+    player.show(100, wait=False)
+    status = player.get_status()
+
+    assert status["current_frame"] == 4  # last available frame
+    assert status["total_frames"] == 5
+    assert status["live"] is True
+
+    player.iv_cache.stop()
+
+
+def test_live_mode_sequential_seek(tmp_path):
+    """Seek 0, 2, 4, then 999 — last one should snap to 4."""
+    h5_path = tmp_path / "live.h5"
+    _write_player_h5(h5_path, n_frames=5)
+
+    from tdgl_sdk.viewer._player import create_player
+    player = create_player(str(h5_path), live=True)
+
+    for idx in [0, 2, 4]:
+        player.show(idx, wait=False)
+        assert player.get_status()["current_frame"] == idx
+
+    player.show(999, wait=False)
+    assert player.get_status()["current_frame"] == 4
+
+    player.iv_cache.stop()
+
+
+def test_non_live_mode_seek_beyond_clamps_to_total(tmp_path):
+    """In non-live mode, seeking beyond total still clamps."""
+    h5_path = tmp_path / "static.h5"
+    _write_player_h5(h5_path, n_frames=5)
+
+    from tdgl_sdk.viewer._player import create_player
+    player = create_player(str(h5_path), live=False)
+
+    player.show(100, wait=False)
+    status = player.get_status()
+    assert status["current_frame"] == 4  # clamped to last frame
+    assert status["live"] is False
+
+    player.iv_cache.stop()

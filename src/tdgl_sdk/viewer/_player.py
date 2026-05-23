@@ -33,6 +33,7 @@ class RealtimeTDGLWidgetPlayer:
         self.total = mesh["total_frames"]
         self.current = 0
         self.playing = False
+        self.live = False  # True when simulation is still writing frames
         self.stop_event = threading.Event()
         self.thread = None
         self.render_lock = threading.RLock()
@@ -88,8 +89,47 @@ class RealtimeTDGLWidgetPlayer:
     def display_player(self):
         display(self.ui)
 
-    def show(self, idx):
-        self.slider.max = max(0, self.total - 1)
+    def _available_frames(self) -> int:
+        """Check how many frames actually exist in the HDF5 right now."""
+        with h5py.File(self.h5_path, "r") as f:
+            if "data" in f:
+                return len(f["data"].keys())
+        return 0
+
+    def _refresh_total(self):
+        """Update self.total from the live HDF5. Called before seek/render."""
+        available = self._available_frames()
+        if available > self.total:
+            self.total = available
+
+    def show(self, idx, wait=True):
+        """Display a frame. In live mode, seeking beyond available frames
+        jumps to the latest available frame and shows a waiting status.
+
+        Args:
+            idx: Frame index to display.
+            wait: If True and live mode, poll until the frame exists.
+                  If False, snap to latest available immediately.
+        """
+        self._refresh_total()
+        available = self.total
+        requested = idx
+
+        if idx >= available:
+            if self.live and wait:
+                # Wait up to 60s for the frame to appear
+                for _ in range(120):
+                    self._refresh_total()
+                    if self.total > idx:
+                        available = self.total
+                        break
+                    self.stop_event.wait(0.5)
+                    if self.stop_event.is_set():
+                        return
+            # Clamp to latest available
+            idx = max(0, available - 1)
+
+        self.slider.max = max(0, self.total - 1) if not self.live else max(0, available - 1)
         idx = int(max(0, min(self.slider.max, idx)))
         with self.render_lock:
             self.current = idx
@@ -97,11 +137,13 @@ class RealtimeTDGLWidgetPlayer:
             self.image.value = png
             if self.slider.value != idx:
                 self.slider.value = idx
-            self.label.value = f"{idx} / {self.slider.max}"
+            tag = "LIVE" if self.live else ""
+            waited = f" (requested {requested}, jumped to {idx})" if requested != idx and requested >= available else ""
+            self.label.value = f"{tag}{idx} / {self.slider.max}{waited}"
             self.buffer.keep_near(idx)
             keys = self.buffer.keys()
             self.status.value = (
-                f"buffer {keys}; I-V cached {self.iv_cache.size()}/{self.total}"
+                f"{tag} buffer {keys}; I-V cached {self.iv_cache.size()}/{self.total}"
             )
 
     def _on_slider(self, change):
@@ -137,11 +179,17 @@ class RealtimeTDGLWidgetPlayer:
     def _loop(self):
         while not self.stop_event.is_set():
             next_idx = self.current + 1
+            self._refresh_total()
             if next_idx >= self.total:
-                self.pause()
-                return
+                if self.live:
+                    # Wait for new frames to arrive
+                    self.stop_event.wait(1.0)
+                    continue
+                else:
+                    self.pause()
+                    return
             t0 = time.perf_counter()
-            self.show(next_idx)
+            self.show(next_idx, wait=False)
             elapsed = time.perf_counter() - t0
             self.stop_event.wait(max(0.0, 1.0 / max(1, self.fps.value) - elapsed))
 
@@ -151,13 +199,16 @@ class RealtimeTDGLWidgetPlayer:
         """Return current player state as a dict. No widgets needed.
 
         Agent can call this to check: how many frames, current position,
-        playing state, I-V cache progress, buffer contents.
+        playing state, live mode, I-V cache progress, buffer contents.
         """
+        self._refresh_total()
         I, V, t = self.iv_cache.arrays()
         return {
             "current_frame": self.current,
             "total_frames": self.total,
             "playing": self.playing,
+            "live": self.live,
+            "at_edge": self.current >= self.total - 1,
             "iv_cache": {
                 "cached_points": len(I),
                 "total_frames": self.total,
@@ -368,14 +419,22 @@ class StreamingTDGLPlayer:
         return result
 
 
-def create_player(h5_path: str) -> RealtimeTDGLWidgetPlayer:
-    """Create a widget player for an HDF5 file."""
+def create_player(h5_path: str, live: bool = False) -> RealtimeTDGLWidgetPlayer:
+    """Create a widget player for an HDF5 file.
+
+    Args:
+        h5_path: Path to the HDF5 file.
+        live: If True, the player expects the file to grow as the simulation
+              runs. Seeking beyond available frames jumps to the latest frame,
+              and playback waits at the boundary for new frames.
+    """
     mesh = load_mesh(h5_path)
     mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"])
     iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128)
     iv_cache.ensure(0)
     iv_cache.start()
     player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax)
+    player.live = live
     return player
 
 
@@ -524,7 +583,26 @@ def debug_player(h5_path: str, seed: int = 42) -> dict:
         steps.append({"action": "check_iv", "ok": False, "error": str(exc)})
         errors.append(f"I-V check failed: {exc}")
 
-    # Step 5: stop (rewind to frame 0)
+    # Step 5: seek beyond available frames (like clicking far ahead on progress bar)
+    beyond_idx = total + 50
+    try:
+        player.show(beyond_idx, wait=False)
+        status = player.get_status()
+        ok = status["current_frame"] < beyond_idx
+        if not ok:
+            errors.append(f"Seek to {beyond_idx} did not snap to available: frame={status['current_frame']}")
+        steps.append({
+            "action": "seek_beyond",
+            "requested": beyond_idx,
+            "landed_on": status["current_frame"],
+            "ok": ok,
+            "status": status,
+        })
+    except Exception as exc:
+        steps.append({"action": "seek_beyond", "ok": False, "error": str(exc)})
+        errors.append(f"seek beyond failed: {exc}")
+
+    # Step 6: stop (rewind to frame 0)
     try:
         player.stop()
         status = player.get_status()
