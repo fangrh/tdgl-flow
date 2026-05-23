@@ -195,12 +195,13 @@ class SimulationPipeline:
         poll_interval: int = 15,
         timing_params: dict | None = None,
         solver_options: dict | None = None,
+        playback_dt: float = 1.0,
     ):
         """Create a streaming viewer for a running simulation.
 
         The viewer polls MinIO for new frames and auto-updates.
-        Pass timing_params + solver_options to pre-allocate the progress bar
-        based on expected frame count.
+        Pass timing_params + solver_options to pre-allocate the progress bar.
+        playback_dt: simulation time per animation step (default 1.0).
         Returns a StreamingTDGLPlayer (call .display_player() in Jupyter).
         """
         from tdgl_sdk.viewer._player import watch_run
@@ -210,6 +211,7 @@ class SimulationPipeline:
             argo_host=self.argo_url,
             timing_params=timing_params,
             solver_options=solver_options,
+            playback_dt=playback_dt,
         )
 
 

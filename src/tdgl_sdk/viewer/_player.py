@@ -63,6 +63,7 @@ class RealtimeTDGLWidgetPlayer:
         self.stop_event = threading.Event()
         self.thread = None
         self.render_lock = threading.RLock()
+        self.playback_dt = 1.0  # simulation time per animation step
 
         # Frame times — physical simulation time for each saved frame
         self.frame_times = self._load_frame_times()
@@ -231,11 +232,36 @@ class RealtimeTDGLWidgetPlayer:
         self.pause()
         self.show(0)
 
+    def _next_frame_by_time(self):
+        """Find the next frame index based on playback_dt.
+
+        Advances by playback_dt in simulation time. If frames are dense,
+        skips ahead. If frames are sparse, jumps to the next one.
+        Returns -1 if no next frame is available yet.
+        """
+        import bisect
+
+        if not self.frame_times or self.current >= len(self.frame_times):
+            return -1
+
+        current_time = self.frame_times[self.current]
+        target_time = current_time + self.playback_dt
+
+        # Find first frame with time >= target_time
+        idx = bisect.bisect_left(self.frame_times, target_time)
+        if idx >= len(self.frame_times):
+            return -1  # past the end
+        if idx == self.current:
+            # No frame ahead at target_time yet
+            return -1
+        return idx
+
     def _loop(self):
         while not self.stop_event.is_set():
-            next_idx = self.current + 1
             self._refresh_total()
-            if next_idx >= self.total:
+            next_idx = self._next_frame_by_time()
+
+            if next_idx < 0 or next_idx >= self.total:
                 if self.live:
                     t_now = (
                         self.frame_times[self.current]
@@ -243,13 +269,17 @@ class RealtimeTDGLWidgetPlayer:
                         else 0
                     )
                     self.status.value = (
-                        f"LIVE t={t_now:.3f}s — waiting for frame {next_idx}..."
+                        f"LIVE t={t_now:.3f}s — waiting..."
                     )
                     self.stop_event.wait(2.0)
                     continue
                 else:
+                    # Try one more: last frame
+                    if self.current < self.total - 1:
+                        self.show(self.total - 1, wait=False)
                     self.pause()
                     return
+
             t0 = time.perf_counter()
             self.show(next_idx, wait=False)
             elapsed = time.perf_counter() - t0
@@ -334,7 +364,7 @@ class StreamingTDGLPlayer:
     """
 
     def __init__(self, store, run_id, poll_interval=15, argo_host=None,
-                 timing_params=None, solver_options=None):
+                 timing_params=None, solver_options=None, playback_dt=1.0):
         if widgets is None:
             raise ImportError("ipywidgets is required")
 
@@ -349,6 +379,7 @@ class StreamingTDGLPlayer:
         self._solve_time = 0.0
         self._timing_params = timing_params
         self._solver_options = solver_options or {}
+        self._playback_dt = playback_dt
         self._expected_frames = (
             estimate_total_frames(timing_params, solver_options)
             if timing_params and solver_options
@@ -467,7 +498,9 @@ class StreamingTDGLPlayer:
             clear_output(wait=True)
 
         self._player = create_player(
-            self._h5_url, live=(status == "running"), **self._s3_kwds
+            self._h5_url, live=(status == "running"),
+            playback_dt=self._playback_dt,
+            **self._s3_kwds,
         )
         if self._solve_time > 0:
             self._player.solve_time = self._solve_time
@@ -502,6 +535,7 @@ class StreamingTDGLPlayer:
 def create_player(
     h5_path: str,
     live: bool = False,
+    playback_dt: float = 1.0,
     **s3_kwds,
 ) -> RealtimeTDGLWidgetPlayer:
     """Create a widget player for an HDF5 file.
@@ -509,6 +543,8 @@ def create_player(
     Args:
         h5_path: Path to the HDF5 file (local path or http:// URL for MinIO).
         live: If True, auto-plays and waits at the boundary for new frames.
+        playback_dt: Simulation time per animation step (default 1.0).
+                     If frames are dense, skips ahead; if sparse, jumps to next.
         **s3_kwds: S3 credentials for ROS3 driver (s3_access_key, s3_secret_key).
     """
     mesh = load_mesh(h5_path, **s3_kwds)
@@ -518,23 +554,27 @@ def create_player(
     iv_cache.start()
     player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, **s3_kwds)
     player.live = live
+    player.playback_dt = playback_dt
     return player
 
 
 def watch_run(
     store, run_id: str, poll_interval: int = 15, argo_host: str | None = None,
     timing_params: dict | None = None, solver_options: dict | None = None,
+    playback_dt: float = 1.0,
 ) -> StreamingTDGLPlayer:
     """Create a streaming player that watches a running simulation in MinIO.
 
     Reads HDF5 directly via ROS3 — no local download needed.
     Pass timing_params + solver_options to pre-allocate the progress bar.
+    playback_dt sets simulation time per animation step (default 1.0).
     """
     return StreamingTDGLPlayer(
         store, run_id, poll_interval,
         argo_host=argo_host,
         timing_params=timing_params,
         solver_options=solver_options,
+        playback_dt=playback_dt,
     )
 
 
