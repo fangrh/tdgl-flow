@@ -213,7 +213,9 @@ def format_report(report: dict) -> str:
 
     for key, val in report.get("data_quality", {}).items():
         if isinstance(val, dict) and "shape" in val:
-            lines.append(f"  {key}: shape={val['shape']}, range=[{val['min']:.4f}, {val['max']:.4f}], "
+            vmin = f"{val['min']:.4f}" if val["min"] is not None else "N/A"
+            vmax = f"{val['max']:.4f}" if val["max"] is not None else "N/A"
+            lines.append(f"  {key}: shape={val['shape']}, range=[{vmin}, {vmax}], "
                         f"nan={val['nan_count']}, inf={val['inf_count']}")
 
     lines.append(f"  I-V available: {report.get('iv_available', False)}")
