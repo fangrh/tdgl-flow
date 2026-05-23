@@ -16,7 +16,7 @@ spec:
       serviceAccountName: argo-workflow
       containers:
         - name: runner
-          image: ghcr.io/fangrh/py-tdgl-runner:9446781
+          image: ghcr.io/fangrh/py-tdgl-runner:6c1a22c
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
