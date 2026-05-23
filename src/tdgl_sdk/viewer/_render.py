@@ -2,12 +2,11 @@ import collections
 import io
 import threading
 
-import h5py
 import matplotlib as mpl
 import numpy as np
 from PIL import Image, ImageDraw
 
-from tdgl_sdk.viewer._mesh import NX, NY, PSI_VMAX, interpolate
+from tdgl_sdk.viewer._mesh import NX, NY, PSI_VMAX, h5open, interpolate
 
 FRAME_W, FRAME_H = 760, 470
 PANEL_W, PANEL_H = 360, 180
@@ -17,8 +16,8 @@ cmap_psi = mpl.colormaps["inferno"]
 cmap_mu = mpl.colormaps["RdBu_r"]
 
 
-def field_rgba(h5_path, points, grid_pts, idx, field, mu_vmax):
-    with h5py.File(h5_path, "r") as f:
+def field_rgba(h5_path, points, grid_pts, idx, field, mu_vmax, **s3_kwds):
+    with h5open(h5_path, "r", **s3_kwds) as f:
         if field == "psi":
             raw = np.abs(np.array(f[f"data/{idx}/psi"]))
         else:
@@ -68,7 +67,7 @@ class RealtimeFrameBuffer:
             return list(self.frames.keys())
 
 
-def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx):
+def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, **s3_kwds):
     idx = int(idx)
     points = mesh["points"]
     grid_pts = mesh["grid_pts"]
@@ -77,8 +76,8 @@ def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx):
     canvas = Image.new("RGBA", (FRAME_W, FRAME_H), (30, 30, 30, 255))
     draw = ImageDraw.Draw(canvas)
 
-    psi_arr = field_rgba(h5_path, points, grid_pts, idx, "psi", mu_vmax)
-    mu_arr = field_rgba(h5_path, points, grid_pts, idx, "mu", mu_vmax)
+    psi_arr = field_rgba(h5_path, points, grid_pts, idx, "psi", mu_vmax, **s3_kwds)
+    mu_arr = field_rgba(h5_path, points, grid_pts, idx, "mu", mu_vmax, **s3_kwds)
     psi_img = Image.fromarray(psi_arr, mode="RGBA").resize(
         (PANEL_W, PANEL_H), Image.Resampling.NEAREST
     )

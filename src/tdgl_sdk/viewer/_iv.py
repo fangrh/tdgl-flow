@@ -3,13 +3,16 @@ import threading
 import h5py
 import numpy as np
 
+from tdgl_sdk.viewer._mesh import h5open
+
 
 class IVCache:
     """Incremental I-V cache for an HDF5 file."""
 
-    def __init__(self, h5_path, mesh, poll_interval=1.0, batch_size=64):
+    def __init__(self, h5_path, mesh, poll_interval=1.0, batch_size=64, **s3_kwds):
         self.h5_path = h5_path
         self._mesh = mesh
+        self._s3_kwds = s3_kwds
         self.poll_interval = poll_interval
         self.batch_size = batch_size
         self.lock = threading.RLock()
@@ -53,7 +56,7 @@ class IVCache:
     def update_available(self, target=None):
         with self.lock:
             start = len(self.I)
-        with h5py.File(self.h5_path, "r") as f:
+        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             available = len(f["data"].keys())
             end = available if target is None else min(available, int(target) + 1)
             while start < end:

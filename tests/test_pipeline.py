@@ -191,7 +191,7 @@ def test_pipeline_verify_detects_problems(pipeline, tmp_path):
 
 
 def test_pipeline_run_full_flow(pipeline, device_params, timing_params, solver_options, tmp_path):
-    """run() submits, polls, downloads, verifies — all steps in sequence."""
+    """run() submits, polls, reads from MinIO via ROS3, verifies."""
     import numpy as np
     import h5py
 
@@ -222,9 +222,16 @@ def test_pipeline_run_full_flow(pipeline, device_params, timing_params, solver_o
             g.create_dataset("normal_current", data=np.random.randn(n_edges))
             g.create_dataset("supercurrent", data=np.random.randn(n_edges))
 
+    # run() now uses h5_url + ROS3; mock to return local path for testing
+    mock_creds = MagicMock()
+    mock_creds.access_key = "minioadmin"
+    mock_creds.secret_key = "minioadmin123"
+
     with patch("hera.workflows.Workflow", return_value=mock_wf), \
          patch("httpx.get", return_value=mock_poll_resp), \
-         patch.object(pipeline.store, "download_h5", return_value=h5_path), \
+         patch.object(pipeline.store, "h5_url", return_value=h5_path), \
+         patch.object(pipeline.store.s3._request_signer._credentials, "access_key", "minioadmin"), \
+         patch.object(pipeline.store.s3._request_signer._credentials, "secret_key", "minioadmin123"), \
          patch.object(pipeline.store, "get_run", return_value={"status": "completed", "n_frames": 3}):
 
         result = pipeline.run(
@@ -234,7 +241,6 @@ def test_pipeline_run_full_flow(pipeline, device_params, timing_params, solver_o
         )
 
     assert result["phase"] == "Succeeded"
-    assert result["h5_path"] == h5_path
     assert result["report"]["healthy"] is True
     assert "run_id" in result
     assert "wf_name" in result

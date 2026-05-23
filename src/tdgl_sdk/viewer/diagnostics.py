@@ -6,11 +6,12 @@ needing to load widgets, plot heatmaps, or visually inspect frames.
 """
 import os
 
-import h5py
 import numpy as np
 
+from tdgl_sdk.viewer._mesh import h5open
 
-def examine_h5(h5_path: str) -> dict:
+
+def examine_h5(h5_path: str, **s3_kwds) -> dict:
     """Examine an HDF5 file and return a structured diagnostic report.
 
     Returns a dict with:
@@ -24,9 +25,12 @@ def examine_h5(h5_path: str) -> dict:
     """
     issues = []
 
-    file_size_mb = round(os.path.getsize(h5_path) / (1024 * 1024), 2)
+    if h5_path.startswith(("http://", "https://")):
+        file_size_mb = None
+    else:
+        file_size_mb = round(os.path.getsize(h5_path) / (1024 * 1024), 2)
 
-    with h5py.File(h5_path, "r") as f:
+    with h5open(h5_path, "r", **s3_kwds) as f:
         top_keys = list(f.keys())
 
         mesh_info = _check_mesh(f, issues)

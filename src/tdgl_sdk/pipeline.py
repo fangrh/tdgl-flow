@@ -116,13 +116,13 @@ class SimulationPipeline:
             raise FileNotFoundError(f"No HDF5 found for run {run_id}")
         return h5_path
 
-    def verify(self, h5_path: str) -> dict:
+    def verify(self, h5_path: str, **s3_kwds) -> dict:
         """Run examine_h5 + debug_player on an HDF5 file. Returns combined report."""
         from tdgl_sdk.viewer.diagnostics import examine_h5, format_report
         from tdgl_sdk.viewer._player import debug_player
 
-        examine_report = examine_h5(h5_path)
-        debug_result = debug_player(h5_path)
+        examine_report = examine_h5(h5_path, **s3_kwds)
+        debug_result = debug_player(h5_path, **s3_kwds)
 
         healthy = examine_report["healthy"] and debug_result["passed"]
 
@@ -168,19 +168,23 @@ class SimulationPipeline:
         if manifest is None:
             raise FileNotFoundError(f"No manifest for run {run_id}")
 
-        print("Step 4: Downloading HDF5 result...")
-        h5_path = self.download(run_id)
-        print(f"  Downloaded to: {h5_path}")
+        print("Step 4: Reading HDF5 from MinIO via ROS3...")
+        h5_url = self.store.h5_url(run_id)
+        print(f"  URL: {h5_url}")
 
         print("Step 5: Verifying data integrity...")
-        report = self.verify(h5_path)
+        s3_kwds = {
+            "s3_access_key": self.store.s3._request_signer._credentials.access_key,
+            "s3_secret_key": self.store.s3._request_signer._credentials.secret_key,
+        }
+        report = self.verify(h5_url, **s3_kwds)
         print(f"  {report['summary']}")
 
         return {
             "run_id": run_id,
             "wf_name": wf_name,
             "phase": phase,
-            "h5_path": h5_path,
+            "h5_path": h5_url,
             "manifest": manifest,
             "report": report,
         }
@@ -203,17 +207,18 @@ class SimulationPipeline:
         )
 
 
-def verify_run(h5_path: str) -> dict:
+def verify_run(h5_path: str, **s3_kwds) -> dict:
     """Convenience function: examine + debug a single HDF5 file.
 
     Agents can call this without constructing a SimulationPipeline.
+    Works with local paths or MinIO URLs (pass s3_access_key/s3_secret_key).
     Returns the same dict as SimulationPipeline.verify().
     """
     from tdgl_sdk.viewer.diagnostics import examine_h5, format_report
     from tdgl_sdk.viewer._player import debug_player
 
-    examine_report = examine_h5(h5_path)
-    debug_result = debug_player(h5_path)
+    examine_report = examine_h5(h5_path, **s3_kwds)
+    debug_result = debug_player(h5_path, **s3_kwds)
 
     healthy = examine_report["healthy"] and debug_result["passed"]
 

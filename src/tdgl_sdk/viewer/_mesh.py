@@ -6,8 +6,21 @@ NX, NY = 100, 50
 PSI_VMAX = 1.05
 
 
-def load_mesh(h5_path):
-    with h5py.File(h5_path, "r") as f:
+def h5open(path, mode="r", **s3_kwds):
+    """Open an HDF5 file. Uses ros3 driver for HTTP URLs."""
+    if path.startswith(("http://", "https://")):
+        return h5py.File(
+            path, mode,
+            driver="ros3",
+            aws_region=b"us-east-1",
+            secret_id=s3_kwds.get("s3_access_key", b"").encode() if isinstance(s3_kwds.get("s3_access_key"), str) else s3_kwds.get("s3_access_key", b""),
+            secret_key=s3_kwds.get("s3_secret_key", b"").encode() if isinstance(s3_kwds.get("s3_secret_key"), str) else s3_kwds.get("s3_secret_key", b""),
+        )
+    return h5py.File(path, mode)
+
+
+def load_mesh(h5_path, **s3_kwds):
+    with h5open(h5_path, "r", **s3_kwds) as f:
         points = np.array(f["solution/device/mesh/sites"])
         edges = np.array(f["solution/device/mesh/edge_mesh/edges"])
         edge_dirs = np.array(f["solution/device/mesh/edge_mesh/directions"])
@@ -35,9 +48,9 @@ def load_mesh(h5_path):
     }
 
 
-def estimate_mu_vmax(h5_path, total):
+def estimate_mu_vmax(h5_path, total, **s3_kwds):
     mu_maxes = []
-    with h5py.File(h5_path, "r") as f:
+    with h5open(h5_path, "r", **s3_kwds) as f:
         for i in range(total):
             try:
                 mu_maxes.append(float(np.abs(np.array(f[f"data/{i}/mu"])).max()))

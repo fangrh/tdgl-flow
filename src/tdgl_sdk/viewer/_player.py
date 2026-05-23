@@ -1,10 +1,8 @@
 import threading
 import time
 
-import h5py
-
 from tdgl_sdk.viewer._iv import IVCache
-from tdgl_sdk.viewer._mesh import estimate_mu_vmax, load_mesh
+from tdgl_sdk.viewer._mesh import estimate_mu_vmax, h5open, load_mesh
 from tdgl_sdk.viewer._render import (
     FRAME_W,
     RealtimeFrameBuffer,
@@ -22,7 +20,7 @@ FPS_DEFAULT = 10
 
 
 class RealtimeTDGLWidgetPlayer:
-    def __init__(self, h5_path, mesh, iv_cache, mu_vmax):
+    def __init__(self, h5_path, mesh, iv_cache, mu_vmax, **s3_kwds):
         if widgets is None:
             raise ImportError("ipywidgets is required for the widget player")
 
@@ -30,6 +28,7 @@ class RealtimeTDGLWidgetPlayer:
         self._mesh = mesh
         self.iv_cache = iv_cache
         self.mu_vmax = mu_vmax
+        self._s3_kwds = s3_kwds
         self.total = mesh["total_frames"]
         self.current = 0
         self.playing = False
@@ -83,7 +82,8 @@ class RealtimeTDGLWidgetPlayer:
 
     def _render(self, idx):
         return render_frame_png(
-            self.h5_path, self._mesh, self.iv_cache, self.mu_vmax, idx
+            self.h5_path, self._mesh, self.iv_cache, self.mu_vmax, idx,
+            **self._s3_kwds
         )
 
     def display_player(self):
@@ -91,7 +91,7 @@ class RealtimeTDGLWidgetPlayer:
 
     def _available_frames(self) -> int:
         """Check how many frames actually exist in the HDF5 right now."""
-        with h5py.File(self.h5_path, "r") as f:
+        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             if "data" in f:
                 return len(f["data"].keys())
         return 0
@@ -227,7 +227,7 @@ class RealtimeTDGLWidgetPlayer:
         idx = int(max(0, min(self.total - 1, idx)))
         import numpy as np
 
-        with h5py.File(self.h5_path, "r") as f:
+        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             frame = f[f"data/{idx}"]
             result = {
                 "frame_idx": idx,
@@ -328,7 +328,7 @@ class StreamingTDGLPlayer:
                         self.status_label.value = f"{status} — waiting for HDF5..."
                         self._stop_event.wait(self.poll_interval)
                         continue
-                    with h5py.File(h5_path, "r") as f:
+                    with h5open(h5_path, "r") as f:
                         n_frames = len(f["data"].keys())
 
                     if self._player is None or self._h5_path != h5_path:
@@ -419,21 +419,22 @@ class StreamingTDGLPlayer:
         return result
 
 
-def create_player(h5_path: str, live: bool = False) -> RealtimeTDGLWidgetPlayer:
+def create_player(h5_path: str, live: bool = False, **s3_kwds) -> RealtimeTDGLWidgetPlayer:
     """Create a widget player for an HDF5 file.
 
     Args:
-        h5_path: Path to the HDF5 file.
+        h5_path: Path to the HDF5 file (local path or http:// URL for MinIO).
         live: If True, the player expects the file to grow as the simulation
               runs. Seeking beyond available frames jumps to the latest frame,
               and playback waits at the boundary for new frames.
+        **s3_kwds: S3 credentials for ROS3 driver (s3_access_key, s3_secret_key).
     """
-    mesh = load_mesh(h5_path)
-    mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"])
-    iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128)
+    mesh = load_mesh(h5_path, **s3_kwds)
+    mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"], **s3_kwds)
+    iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, **s3_kwds)
     iv_cache.ensure(0)
     iv_cache.start()
-    player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax)
+    player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, **s3_kwds)
     player.live = live
     return player
 
@@ -444,7 +445,7 @@ def watch_run(store, run_id: str, poll_interval: int = 15, argo_host: str | None
     return player
 
 
-def debug_player(h5_path: str, seed: int = 42) -> dict:
+def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
     """Automated smoke test for the viewer player.
 
     Simulates human interaction: play, random seek, pause, stop.
@@ -480,7 +481,7 @@ def debug_player(h5_path: str, seed: int = 42) -> dict:
     errors = []
 
     try:
-        player = create_player(h5_path)
+        player = create_player(h5_path, **s3_kwds)
     except Exception as exc:
         return {
             "passed": False,
