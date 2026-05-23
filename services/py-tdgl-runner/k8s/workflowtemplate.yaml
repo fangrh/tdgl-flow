@@ -15,7 +15,7 @@ spec:
       - name: run-id
         value: ""
       - name: image
-        value: "ghcr.io/fangrh/py-tdgl-runner:b01dad9"
+        value: "ghcr.io/fangrh/py-tdgl-runner:119086e"
       - name: device-params-json
         value: "{}"
       - name: timing-params-json
