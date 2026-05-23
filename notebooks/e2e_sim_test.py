@@ -84,7 +84,11 @@ print(f"Submitted: run_id={run_id}, workflow={wf_name}")
 # The viewer reads HDF5 directly from MinIO via ROS3 (no local download).
 # Click "Stop watching" when done, or let it run until the workflow finishes.
 
-live_player = pipeline.watch_live(run_id, poll_interval=10)
+live_player = pipeline.watch_live(
+    run_id, poll_interval=10,
+    timing_params=TIMING_PARAMS,
+    solver_options=SOLVER_OPTIONS,
+)
 live_player.display_player()
 
 #%%

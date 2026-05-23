@@ -1,3 +1,4 @@
+import math
 import threading
 import time
 
@@ -19,6 +20,31 @@ except ImportError:
 FPS_DEFAULT = 10
 
 
+def estimate_total_frames(timing_params: dict, solver_options: dict) -> int:
+    """Estimate expected total frames from timing and solver parameters.
+
+    Each timing step has a save_time window. Frames are saved every save_every
+    solver steps. Using dt_max gives a conservative (lower-bound) estimate.
+    """
+    n_steps = timing_params.get("n_steps", 0)
+    if n_steps == 0:
+        je_range = timing_params.get("je_final", 0) - timing_params.get("je_initial", 0)
+        je_step = timing_params.get("je_step", 1)
+        n_steps = max(1, round(je_range / je_step)) if je_step else 1
+
+    save_time = timing_params.get("save_time", 2.0)
+    save_every = solver_options.get("save_every", 100)
+    dt_max = solver_options.get("dt_max", 0.1)
+
+    time_between_saves = save_every * dt_max
+    frames_per_step = max(1, round(save_time / time_between_saves))
+
+    ramp_down = timing_params.get("ramp_down", False)
+    extra = n_steps if ramp_down else 0
+
+    return 1 + (n_steps + extra) * frames_per_step
+
+
 class RealtimeTDGLWidgetPlayer:
     def __init__(self, h5_path, mesh, iv_cache, mu_vmax, **s3_kwds):
         if widgets is None:
@@ -30,6 +56,7 @@ class RealtimeTDGLWidgetPlayer:
         self.mu_vmax = mu_vmax
         self._s3_kwds = s3_kwds
         self.total = mesh["total_frames"]
+        self.expected_total = self.total  # set higher for live mode from timing
         self.current = 0
         self.playing = False
         self.live = False
@@ -57,7 +84,7 @@ class RealtimeTDGLWidgetPlayer:
         self.slider = widgets.IntSlider(
             value=0,
             min=0,
-            max=max(0, self.total - 1),
+            max=max(0, self.expected_total - 1),
             step=1,
             description="Frame",
             continuous_update=False,
@@ -137,10 +164,8 @@ class RealtimeTDGLWidgetPlayer:
             self.total = available
 
     def show(self, idx, wait=True):
-        """Display a frame.
-
-        In live mode, seeking beyond available frames jumps to the latest
-        available frame and shows a waiting status.
+        """Display a frame. In live mode, seeks beyond available frames
+        jump to the latest available frame.
         """
         self._refresh_total()
         available = self.total
@@ -158,8 +183,9 @@ class RealtimeTDGLWidgetPlayer:
                         return
             idx = max(0, available - 1)
 
-        self.slider.max = max(0, available - 1)
-        idx = int(max(0, min(self.slider.max, idx)))
+        # Slider shows full expected range in live mode
+        self.slider.max = max(0, self.expected_total - 1)
+        idx = int(max(0, min(available - 1, idx)))
         with self.render_lock:
             self.current = idx
             png = self.buffer.get(idx, self._render)
@@ -170,7 +196,8 @@ class RealtimeTDGLWidgetPlayer:
             self.buffer.keep_near(idx)
             tag = "LIVE " if self.live else ""
             self.status.value = (
-                f"{tag}frame {idx}/{available-1}; "
+                f"{tag}frame {idx}/{available-1} "
+                f"(expect {self.expected_total}); "
                 f"I-V {self.iv_cache.size()}/{self.total}"
             )
 
@@ -306,7 +333,8 @@ class StreamingTDGLPlayer:
     Reads HDF5 directly from MinIO via ROS3 — no local download needed.
     """
 
-    def __init__(self, store, run_id, poll_interval=15, argo_host=None):
+    def __init__(self, store, run_id, poll_interval=15, argo_host=None,
+                 timing_params=None, solver_options=None):
         if widgets is None:
             raise ImportError("ipywidgets is required")
 
@@ -318,7 +346,14 @@ class StreamingTDGLPlayer:
         self._poll_thread = None
         self._player = None
         self._completed = False
-        self._solve_time = 0.0  # total simulation time from manifest
+        self._solve_time = 0.0
+        self._timing_params = timing_params
+        self._solver_options = solver_options or {}
+        self._expected_frames = (
+            estimate_total_frames(timing_params, solver_options)
+            if timing_params and solver_options
+            else 0
+        )
         self._s3_kwds = {
             "s3_access_key": store.s3._request_signer._credentials.access_key,
             "s3_secret_key": store.s3._request_signer._credentials.secret_key,
@@ -436,6 +471,9 @@ class StreamingTDGLPlayer:
         )
         if self._solve_time > 0:
             self._player.solve_time = self._solve_time
+        if self._expected_frames > 0:
+            self._player.expected_total = self._expected_frames
+            self._player.slider.max = max(0, self._expected_frames - 1)
         with self.output:
             clear_output(wait=True)
             self._player.display_player()  # auto-plays if live
@@ -484,13 +522,20 @@ def create_player(
 
 
 def watch_run(
-    store, run_id: str, poll_interval: int = 15, argo_host: str | None = None
+    store, run_id: str, poll_interval: int = 15, argo_host: str | None = None,
+    timing_params: dict | None = None, solver_options: dict | None = None,
 ) -> StreamingTDGLPlayer:
     """Create a streaming player that watches a running simulation in MinIO.
 
     Reads HDF5 directly via ROS3 — no local download needed.
+    Pass timing_params + solver_options to pre-allocate the progress bar.
     """
-    return StreamingTDGLPlayer(store, run_id, poll_interval, argo_host=argo_host)
+    return StreamingTDGLPlayer(
+        store, run_id, poll_interval,
+        argo_host=argo_host,
+        timing_params=timing_params,
+        solver_options=solver_options,
+    )
 
 
 def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
