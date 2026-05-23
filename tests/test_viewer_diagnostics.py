@@ -136,3 +136,105 @@ def test_format_report_shows_issues(tmp_path):
 
     assert "Healthy: False" in text
     assert "NaN" in text
+
+
+# ── Agent API tests: get_status, get_frame_data, get_iv_data ──────────
+
+def _write_player_h5(path: Path, n_frames: int = 3) -> None:
+    n_sites = 10
+    n_edges = 5
+    with h5py.File(path, "w") as f:
+        mesh = f.create_group("solution/device/mesh")
+        mesh.create_dataset("sites", data=np.random.rand(n_sites, 2))
+        mesh.create_dataset("edge_mesh/edges", data=np.zeros((n_edges, 2), dtype=int))
+        mesh.create_dataset("edge_mesh/directions", data=np.random.rand(n_edges, 2))
+        mesh.create_dataset("edge_mesh/dual_edge_lengths", data=np.random.rand(n_edges))
+
+        data = f.create_group("data")
+        for i in range(n_frames):
+            g = data.create_group(str(i))
+            g.attrs["time"] = float(i)
+            g.create_dataset("psi", data=np.random.rand(n_sites))
+            g.create_dataset("mu", data=np.random.randn(n_sites))
+            g.create_dataset("normal_current", data=np.random.randn(n_edges))
+            g.create_dataset("supercurrent", data=np.random.randn(n_edges))
+
+
+def test_player_get_status(tmp_path):
+    h5_path = tmp_path / "player.h5"
+    _write_player_h5(h5_path, n_frames=5)
+
+    from tdgl_sdk.viewer._player import create_player
+    player = create_player(str(h5_path))
+
+    status = player.get_status()
+    assert status["total_frames"] == 5
+    assert status["current_frame"] == 0
+    assert status["playing"] is False
+    assert "iv_cache" in status
+    assert status["iv_cache"]["cached_points"] >= 0
+    assert status["h5_path"] == str(h5_path)
+
+    player.iv_cache.stop()
+
+
+def test_player_get_frame_data(tmp_path):
+    h5_path = tmp_path / "player.h5"
+    _write_player_h5(h5_path, n_frames=5)
+
+    from tdgl_sdk.viewer._player import create_player
+    player = create_player(str(h5_path))
+
+    data = player.get_frame_data(0)
+    assert data["frame_idx"] == 0
+    assert data["time"] == 0.0
+    assert data["psi_present"] is True
+    assert data["mu_present"] is True
+    assert data["psi_nan"] == 0
+    assert "psi_range" in data
+    assert len(data["psi_range"]) == 2
+    assert data["normal_current_present"] is True
+
+    data_last = player.get_frame_data(4)
+    assert data_last["frame_idx"] == 4
+    assert data_last["time"] == 4.0
+
+    player.iv_cache.stop()
+
+
+def test_player_get_iv_data(tmp_path):
+    h5_path = tmp_path / "player.h5"
+    _write_player_h5(h5_path, n_frames=5)
+
+    from tdgl_sdk.viewer._player import create_player
+    player = create_player(str(h5_path))
+
+    iv = player.get_iv_data()
+    assert "n_points" in iv
+    assert "I" in iv
+    assert "V" in iv
+    assert "t" in iv
+    assert "I_range" in iv
+    assert "V_range" in iv
+    assert len(iv["I_range"]) == 2
+
+    player.iv_cache.stop()
+
+
+def test_player_seek_and_status(tmp_path):
+    h5_path = tmp_path / "player.h5"
+    _write_player_h5(h5_path, n_frames=5)
+
+    from tdgl_sdk.viewer._player import create_player
+    player = create_player(str(h5_path))
+
+    player.show(3)
+    status = player.get_status()
+    assert status["current_frame"] == 3
+
+    player.stop()
+    status = player.get_status()
+    assert status["current_frame"] == 0
+    assert status["playing"] is False
+
+    player.iv_cache.stop()

@@ -145,6 +145,79 @@ class RealtimeTDGLWidgetPlayer:
             elapsed = time.perf_counter() - t0
             self.stop_event.wait(max(0.0, 1.0 / max(1, self.fps.value) - elapsed))
 
+    # ── Agent diagnostic API ────────────────────────────────────────────
+
+    def get_status(self) -> dict:
+        """Return current player state as a dict. No widgets needed.
+
+        Agent can call this to check: how many frames, current position,
+        playing state, I-V cache progress, buffer contents.
+        """
+        I, V, t = self.iv_cache.arrays()
+        return {
+            "current_frame": self.current,
+            "total_frames": self.total,
+            "playing": self.playing,
+            "iv_cache": {
+                "cached_points": len(I),
+                "total_frames": self.total,
+                "progress_pct": round(len(I) / max(1, self.total) * 100, 1),
+            },
+            "buffer_frames": self.buffer.keys(),
+            "h5_path": self.h5_path,
+        }
+
+    def get_frame_data(self, idx: int) -> dict:
+        """Return psi/mu stats for a specific frame without rendering.
+
+        Agent can call this to check data at any frame index.
+        Returns shape, range, and NaN/Inf counts — no image generation.
+        """
+        idx = int(max(0, min(self.total - 1, idx)))
+        import numpy as np
+
+        with h5py.File(self.h5_path, "r") as f:
+            frame = f[f"data/{idx}"]
+            result = {
+                "frame_idx": idx,
+                "time": float(frame.attrs.get("time", idx)),
+                "datasets": list(frame.keys()),
+            }
+
+            for field in ("psi", "mu"):
+                if field not in frame:
+                    result[f"{field}_present"] = False
+                    continue
+                arr = np.array(frame[field])
+                arr_real = np.abs(arr) if np.iscomplexobj(arr) else arr
+                result[f"{field}_present"] = True
+                result[f"{field}_shape"] = list(arr.shape)
+                result[f"{field}_range"] = [float(np.nanmin(arr_real)), float(np.nanmax(arr_real))]
+                result[f"{field}_nan"] = int(np.sum(np.isnan(arr)))
+
+            for field in ("normal_current", "supercurrent"):
+                result[f"{field}_present"] = field in frame
+
+            return result
+
+    def get_iv_data(self, upto: int | None = None) -> dict:
+        """Return I-V curve data up to a frame index.
+
+        Agent can call this to get the full I-V trace or up to a specific frame.
+        Returns lists of I, V, t values and axis ranges.
+        """
+        self.iv_cache.ensure(upto or 0)
+        I, V, t = self.iv_cache.arrays(upto=upto)
+        I_min, I_max, V_min, V_max = self.iv_cache.ranges()
+        return {
+            "n_points": len(I),
+            "I": I.tolist(),
+            "V": V.tolist(),
+            "t": t.tolist(),
+            "I_range": [I_min, I_max],
+            "V_range": [V_min, V_max],
+        }
+
 
 class StreamingTDGLPlayer:
     """Watches a run in MinIO and auto-updates the viewer as new frames arrive."""
@@ -276,6 +349,23 @@ class StreamingTDGLPlayer:
             self._player.pause()
             self._player.iv_cache.stop()
         self.status_label.value = "stopped"
+
+    # ── Agent diagnostic API ────────────────────────────────────────────
+
+    def get_status(self) -> dict:
+        """Return streaming watcher state as a dict. No widgets needed.
+
+        Agent can call this to check: is the run live, how many frames
+        arrived, manifest status, inner player state.
+        """
+        result = {
+            "run_id": self.run_id,
+            "watching": not self._stop_event.is_set(),
+            "h5_downloaded": self._h5_path is not None,
+        }
+        if self._player is not None:
+            result["player"] = self._player.get_status()
+        return result
 
 
 def create_player(h5_path: str) -> RealtimeTDGLWidgetPlayer:
