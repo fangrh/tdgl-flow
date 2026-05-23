@@ -1,17 +1,18 @@
 """Python tdgl simulation runner (Argo simulate step).
 
-Reads mesh_meta.json and timing.json from shared volume, runs the Python tdgl solver
+Reads device.pkl and timing.json from shared volume, runs the Python tdgl solver
 with output_file to produce HDF5, uploads to MinIO periodically during the solve
 for real-time viewing, and writes a final manifest on completion.
 """
 import json
 import os
+import pickle
 import sys
 import threading
 from datetime import datetime, timezone
 
 import boto3
-import numpy as np
+import tdgl
 from botocore.config import Config as BotoConfig
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
@@ -61,37 +62,20 @@ def main() -> None:
     bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
     now = datetime.now(timezone.utc).isoformat()
 
-    with open(os.path.join(DATA_DIR, "mesh_meta.json")) as f:
-        mesh_meta = json.load(f)
+    with open(os.path.join(DATA_DIR, "device.pkl"), "rb") as f:
+        device = pickle.load(f)
 
     with open(os.path.join(DATA_DIR, "timing.json")) as f:
         timing_data = json.load(f)
 
-    import tdgl
+    n_sites = len(device.points)
 
-    sites = np.array(mesh_meta["sites"], dtype=np.float64)
-    triangles = np.array(mesh_meta["elements"], dtype=np.int64)
-
-    layer = tdgl.Layer(
-        coherence_length=mesh_meta["layer"]["coherence_length"],
-        london_lambda=mesh_meta["layer"]["london_lambda"],
-        thickness=mesh_meta["layer"]["thickness"],
-        gamma=mesh_meta["layer"]["gamma"],
-    )
-
-    device = tdgl.Device(
-        name=mesh_meta["device_constants"]["name"],
-        layer=layer,
-        film=tdgl.Polygon("film", points=sites[triangles].reshape(-1, 2)),
-        terminals=[
-            tdgl.Polygon(t["name"], points=sites[t["site_indices"]].reshape(-1, 2))
-            for t in mesh_meta["terminals"]
-        ],
-        probe_points=[sites[i] for i in mesh_meta["probe_indices"]],
-    )
-    device._points = sites
-    device._triangles = triangles
-    device.make_mesh(max_edge_length=mesh_meta["max_edge_length"], smooth=mesh_meta["smooth"])
+    # Read mesh_meta.json for manifest metadata if available
+    mesh_meta_path = os.path.join(DATA_DIR, "mesh_meta.json")
+    mesh_meta = {}
+    if os.path.exists(mesh_meta_path):
+        with open(mesh_meta_path) as f:
+            mesh_meta = json.load(f)
 
     steps = timing_data["steps"] + timing_data.get("ramp_down_steps", [])
     times = [s["stable_end"] for s in steps]
@@ -119,14 +103,14 @@ def main() -> None:
         "run_id": run_id,
         "status": "running",
         "created_at": now,
-        "n_sites": mesh_meta["num_sites"],
+        "n_sites": n_sites,
         "device_params": {
-            "film_width": mesh_meta["film_width"],
-            "film_height": mesh_meta["film_height"],
-            "elec_width": mesh_meta["elec_width"],
-            "elec_height": mesh_meta["elec_height"],
-            "max_edge_length": mesh_meta["max_edge_length"],
-            "smooth": mesh_meta["smooth"],
+            "film_width": mesh_meta.get("film_width"),
+            "film_height": mesh_meta.get("film_height"),
+            "elec_width": mesh_meta.get("elec_width"),
+            "elec_height": mesh_meta.get("elec_height"),
+            "max_edge_length": mesh_meta.get("max_edge_length"),
+            "smooth": mesh_meta.get("smooth"),
         },
         "timing_params": {
             "mode": timing_data["mode"],
@@ -162,15 +146,15 @@ def main() -> None:
             "run_id": run_id,
             "status": "completed",
             "created_at": now,
-            "n_sites": mesh_meta["num_sites"],
+            "n_sites": n_sites,
             "n_frames": len(solution.times),
             "device_params": {
-                "film_width": mesh_meta["film_width"],
-                "film_height": mesh_meta["film_height"],
-                "elec_width": mesh_meta["elec_width"],
-                "elec_height": mesh_meta["elec_height"],
-                "max_edge_length": mesh_meta["max_edge_length"],
-                "smooth": mesh_meta["smooth"],
+                "film_width": mesh_meta.get("film_width"),
+                "film_height": mesh_meta.get("film_height"),
+                "elec_width": mesh_meta.get("elec_width"),
+                "elec_height": mesh_meta.get("elec_height"),
+                "max_edge_length": mesh_meta.get("max_edge_length"),
+                "smooth": mesh_meta.get("smooth"),
             },
             "timing_params": {
                 "mode": timing_data["mode"],
