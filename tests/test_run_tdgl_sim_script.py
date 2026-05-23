@@ -1,4 +1,4 @@
-"""Verify run_tdgl_sim.py is syntactically valid and its functions are importable."""
+"""Verify run_tdgl_sim.py is syntactically valid and uses SimulationPipeline SDK."""
 import ast
 from pathlib import Path
 
@@ -10,18 +10,32 @@ def test_script_syntax():
     source = SCRIPT.read_text()
     tree = ast.parse(source)
     func_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-    expected = {
-        "create_argo_service",
-        "create_store",
-        "submit_workflow",
-        "poll_workflow",
-        "check_manifest",
-        "download_result",
-        "preview_animation",
-        "print_static_summary",
-        "main",
-    }
+    # After refactor, script only needs main() function
+    expected = {"main"}
     assert expected.issubset(func_names), f"Missing functions: {expected - func_names}"
+
+
+def test_uses_simulation_pipeline():
+    source = SCRIPT.read_text()
+    tree = ast.parse(source)
+
+    # Check that SimulationPipeline is imported and used
+    imports_simulation_pipeline = False
+    calls_simulation_pipeline = False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module and node.module == "tdgl_sdk":
+                for alias in node.names:
+                    if alias.name == "SimulationPipeline":
+                        imports_simulation_pipeline = True
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id == "SimulationPipeline":
+                    calls_simulation_pipeline = True
+
+    assert imports_simulation_pipeline, "Script should import SimulationPipeline from tdgl_sdk"
+    assert calls_simulation_pipeline, "Script should instantiate SimulationPipeline"
 
 
 def test_default_params():
