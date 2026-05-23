@@ -32,10 +32,15 @@ class RealtimeTDGLWidgetPlayer:
         self.total = mesh["total_frames"]
         self.current = 0
         self.playing = False
-        self.live = False  # True when simulation is still writing frames
+        self.live = False
         self.stop_event = threading.Event()
         self.thread = None
         self.render_lock = threading.RLock()
+
+        # Frame times — physical simulation time for each saved frame
+        self.frame_times = self._load_frame_times()
+        # Expected total simulation time (set by StreamingTDGLPlayer from manifest)
+        self.solve_time = self.frame_times[-1] if self.frame_times else 0
 
         self.buffer = RealtimeFrameBuffer()
         self.image = widgets.Image(
@@ -56,7 +61,11 @@ class RealtimeTDGLWidgetPlayer:
             step=1,
             description="Frame",
             continuous_update=False,
-            layout=widgets.Layout(width="520px"),
+            layout=widgets.Layout(width="400px"),
+        )
+        self.time_label = widgets.Label(
+            value=self._fmt_time(0),
+            layout=widgets.Layout(width="180px"),
         )
         self.fps = widgets.IntSlider(
             value=FPS_DEFAULT,
@@ -67,18 +76,34 @@ class RealtimeTDGLWidgetPlayer:
             continuous_update=False,
             layout=widgets.Layout(width="220px"),
         )
-        self.label = widgets.Label(value=f"0 / {max(0, self.total - 1)}")
-        self.status = widgets.Label(value="heatmap buffer [0]")
+        self.status = widgets.Label(value="buffer [0]")
 
         self.play_button.on_click(self.toggle)
         self.stop_button.on_click(self.stop)
         self.slider.observe(self._on_slider, names="value")
 
         self.ui = widgets.VBox([
-            widgets.HBox([self.play_button, self.stop_button, self.slider, self.label]),
+            widgets.HBox([self.play_button, self.stop_button, self.slider, self.time_label]),
             widgets.HBox([self.fps, self.status]),
             self.image,
         ])
+
+    def _load_frame_times(self):
+        """Load physical time for each frame from HDF5 attrs."""
+        times = []
+        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+            for i in range(self.total):
+                t = float(f[f"data/{i}"].attrs.get("time", i))
+                times.append(t)
+        return times
+
+    def _fmt_time(self, idx):
+        """Format time display: 't=X.XXX / Y.YYY s'."""
+        if not self.frame_times:
+            return f"t=? / {self.solve_time:.3f} s" if self.solve_time else "t=? / ? s"
+        t = self.frame_times[min(idx, len(self.frame_times) - 1)]
+        t_end = self.solve_time or self.frame_times[-1]
+        return f"t={t:.3f} / {t_end:.3f} s"
 
     def _render(self, idx):
         return render_frame_png(
@@ -88,28 +113,34 @@ class RealtimeTDGLWidgetPlayer:
 
     def display_player(self):
         display(self.ui)
+        if self.live and self.total > 0:
+            self.play()
 
     def _available_frames(self) -> int:
         """Check how many frames actually exist in the HDF5 right now."""
-        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
-            if "data" in f:
-                return len(f["data"].keys())
+        try:
+            with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+                if "data" in f:
+                    return len(f["data"].keys())
+        except Exception:
+            pass
         return 0
 
     def _refresh_total(self):
-        """Update self.total from the live HDF5. Called before seek/render."""
+        """Update self.total and frame_times from the live HDF5."""
         available = self._available_frames()
         if available > self.total:
+            with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+                for i in range(self.total, available):
+                    t = float(f[f"data/{i}"].attrs.get("time", i))
+                    self.frame_times.append(t)
             self.total = available
 
     def show(self, idx, wait=True):
-        """Display a frame. In live mode, seeking beyond available frames
-        jumps to the latest available frame and shows a waiting status.
+        """Display a frame.
 
-        Args:
-            idx: Frame index to display.
-            wait: If True and live mode, poll until the frame exists.
-                  If False, snap to latest available immediately.
+        In live mode, seeking beyond available frames jumps to the latest
+        available frame and shows a waiting status.
         """
         self._refresh_total()
         available = self.total
@@ -117,7 +148,6 @@ class RealtimeTDGLWidgetPlayer:
 
         if idx >= available:
             if self.live and wait:
-                # Wait up to 60s for the frame to appear
                 for _ in range(120):
                     self._refresh_total()
                     if self.total > idx:
@@ -126,10 +156,9 @@ class RealtimeTDGLWidgetPlayer:
                     self.stop_event.wait(0.5)
                     if self.stop_event.is_set():
                         return
-            # Clamp to latest available
             idx = max(0, available - 1)
 
-        self.slider.max = max(0, self.total - 1) if not self.live else max(0, available - 1)
+        self.slider.max = max(0, available - 1)
         idx = int(max(0, min(self.slider.max, idx)))
         with self.render_lock:
             self.current = idx
@@ -137,13 +166,12 @@ class RealtimeTDGLWidgetPlayer:
             self.image.value = png
             if self.slider.value != idx:
                 self.slider.value = idx
-            tag = "LIVE" if self.live else ""
-            waited = f" (requested {requested}, jumped to {idx})" if requested != idx and requested >= available else ""
-            self.label.value = f"{tag}{idx} / {self.slider.max}{waited}"
+            self.time_label.value = self._fmt_time(idx)
             self.buffer.keep_near(idx)
-            keys = self.buffer.keys()
+            tag = "LIVE " if self.live else ""
             self.status.value = (
-                f"{tag} buffer {keys}; I-V cached {self.iv_cache.size()}/{self.total}"
+                f"{tag}frame {idx}/{available-1}; "
+                f"I-V {self.iv_cache.size()}/{self.total}"
             )
 
     def _on_slider(self, change):
@@ -182,8 +210,15 @@ class RealtimeTDGLWidgetPlayer:
             self._refresh_total()
             if next_idx >= self.total:
                 if self.live:
-                    # Wait for new frames to arrive
-                    self.stop_event.wait(1.0)
+                    t_now = (
+                        self.frame_times[self.current]
+                        if self.current < len(self.frame_times)
+                        else 0
+                    )
+                    self.status.value = (
+                        f"LIVE t={t_now:.3f}s — waiting for frame {next_idx}..."
+                    )
+                    self.stop_event.wait(2.0)
                     continue
                 else:
                     self.pause()
@@ -196,11 +231,6 @@ class RealtimeTDGLWidgetPlayer:
     # ── Agent diagnostic API ────────────────────────────────────────────
 
     def get_status(self) -> dict:
-        """Return current player state as a dict. No widgets needed.
-
-        Agent can call this to check: how many frames, current position,
-        playing state, live mode, I-V cache progress, buffer contents.
-        """
         self._refresh_total()
         I, V, t = self.iv_cache.arrays()
         return {
@@ -208,6 +238,12 @@ class RealtimeTDGLWidgetPlayer:
             "total_frames": self.total,
             "playing": self.playing,
             "live": self.live,
+            "current_time": (
+                self.frame_times[self.current]
+                if self.current < len(self.frame_times)
+                else None
+            ),
+            "total_time": self.frame_times[-1] if self.frame_times else None,
             "at_edge": self.current >= self.total - 1,
             "iv_cache": {
                 "cached_points": len(I),
@@ -219,11 +255,6 @@ class RealtimeTDGLWidgetPlayer:
         }
 
     def get_frame_data(self, idx: int) -> dict:
-        """Return psi/mu stats for a specific frame without rendering.
-
-        Agent can call this to check data at any frame index.
-        Returns shape, range, and NaN/Inf counts — no image generation.
-        """
         idx = int(max(0, min(self.total - 1, idx)))
         import numpy as np
 
@@ -252,11 +283,6 @@ class RealtimeTDGLWidgetPlayer:
             return result
 
     def get_iv_data(self, upto: int | None = None) -> dict:
-        """Return I-V curve data up to a frame index.
-
-        Agent can call this to get the full I-V trace or up to a specific frame.
-        Returns lists of I, V, t values and axis ranges.
-        """
         self.iv_cache.ensure(upto or 0)
         I, V, t = self.iv_cache.arrays(upto=upto)
         I_min, I_max, V_min, V_max = self.iv_cache.ranges()
@@ -271,7 +297,11 @@ class RealtimeTDGLWidgetPlayer:
 
 
 class StreamingTDGLPlayer:
-    """Watches a run in MinIO and auto-updates the viewer as new frames arrive.
+    """Watches a running simulation in MinIO and shows live animation.
+
+    Waits for data to appear, creates the inner player with live=True (which
+    auto-plays and waits at the boundary for new frames), then monitors the
+    manifest for completion/failure.
 
     Reads HDF5 directly from MinIO via ROS3 — no local download needed.
     """
@@ -287,6 +317,8 @@ class StreamingTDGLPlayer:
         self._stop_event = threading.Event()
         self._poll_thread = None
         self._player = None
+        self._completed = False
+        self._solve_time = 0.0  # total simulation time from manifest
         self._s3_kwds = {
             "s3_access_key": store.s3._request_signer._credentials.access_key,
             "s3_secret_key": store.s3._request_signer._credentials.secret_key,
@@ -316,18 +348,23 @@ class StreamingTDGLPlayer:
                 if manifest is None:
                     wf_status = self._check_argo_status()
                     if wf_status == "failed":
-                        self.status_label.value = "Workflow FAILED before simulation started"
+                        self.status_label.value = "Workflow FAILED"
                         return
-                    elif wf_status == "running":
-                        self.status_label.value = "Workflow running — waiting for simulation to start..."
-                    elif wf_status == "succeeded":
-                        self.status_label.value = "Workflow succeeded but no results in MinIO"
+                    elif wf_status in ("running", "pending", "submitted"):
+                        self.status_label.value = (
+                            f"Workflow {wf_status} — waiting for simulation..."
+                        )
                     else:
                         self.status_label.value = f"waiting... (Argo: {wf_status})"
                     self._stop_event.wait(self.poll_interval)
                     continue
 
                 status = manifest.get("status", "unknown")
+
+                # Track expected simulation time from manifest
+                timing = manifest.get("timing_params") or {}
+                if timing.get("solve_time"):
+                    self._solve_time = timing["solve_time"]
 
                 if status in ("running", "completed"):
                     try:
@@ -341,16 +378,26 @@ class StreamingTDGLPlayer:
                         self._stop_event.wait(self.poll_interval)
                         continue
 
+                    # Create player once when data first appears
                     if self._player is None:
-                        self._rebuild_player(n_frames, status)
-                    else:
-                        self._update_frame_count(n_frames, status)
+                        self._create_player(status)
+
+                    # Mark completion
+                    if status == "completed" and not self._completed:
+                        self._completed = True
+                        if self._player:
+                            self._player.live = False
+                        self.status_label.value = f"Complete — {n_frames} frames"
+                    elif status == "running" and not self._completed:
+                        self.status_label.value = f"LIVE — {n_frames} frames"
 
                 elif status == "failed":
-                    self.status_label.value = f"Run {self.run_id[:8]} FAILED: {manifest.get('error', '')}"
+                    self.status_label.value = (
+                        f"FAILED: {manifest.get('error', '')}"
+                    )
                     return
                 else:
-                    self.status_label.value = f"Run {self.run_id[:8]} status: {status}"
+                    self.status_label.value = f"status: {status}"
 
             except Exception as exc:
                 self.status_label.value = f"poll error: {exc}"
@@ -377,31 +424,21 @@ class StreamingTDGLPlayer:
         except Exception:
             return "unknown"
 
-    def _rebuild_player(self, n_frames, status):
+    def _create_player(self, status):
+        """Create the inner player once when data first appears."""
         from IPython.display import clear_output
 
         with self.output:
             clear_output(wait=True)
-        if self._player is not None:
-            self._player.pause()
-            self._player.iv_cache.stop()
 
-        if n_frames == 0:
-            self.status_label.value = f"{status} — waiting for frames..."
-            return
-
-        self._player = create_player(self._h5_url, live=(status == "running"), **self._s3_kwds)
-        self.status_label.value = f"{status} — {n_frames} frames"
+        self._player = create_player(
+            self._h5_url, live=(status == "running"), **self._s3_kwds
+        )
+        if self._solve_time > 0:
+            self._player.solve_time = self._solve_time
         with self.output:
             clear_output(wait=True)
-            self._player.display_player()
-
-    def _update_frame_count(self, n_frames, status):
-        if self._player and n_frames > self._player.total:
-            self._player.total = n_frames
-            self._player.slider.max = max(0, n_frames - 1)
-        tag = "LIVE" if status == "running" else "done"
-        self.status_label.value = f"{tag} — {n_frames} frames"
+            self._player.display_player()  # auto-plays if live
 
     def stop(self):
         self._stop_event.set()
@@ -413,14 +450,10 @@ class StreamingTDGLPlayer:
     # ── Agent diagnostic API ────────────────────────────────────────────
 
     def get_status(self) -> dict:
-        """Return streaming watcher state as a dict. No widgets needed.
-
-        Agent can call this to check: is the run live, how many frames
-        arrived, manifest status, inner player state.
-        """
         result = {
             "run_id": self.run_id,
             "watching": not self._stop_event.is_set(),
+            "completed": self._completed,
             "h5_url": self._h5_url,
         }
         if self._player is not None:
@@ -428,14 +461,16 @@ class StreamingTDGLPlayer:
         return result
 
 
-def create_player(h5_path: str, live: bool = False, **s3_kwds) -> RealtimeTDGLWidgetPlayer:
+def create_player(
+    h5_path: str,
+    live: bool = False,
+    **s3_kwds,
+) -> RealtimeTDGLWidgetPlayer:
     """Create a widget player for an HDF5 file.
 
     Args:
         h5_path: Path to the HDF5 file (local path or http:// URL for MinIO).
-        live: If True, the player expects the file to grow as the simulation
-              runs. Seeking beyond available frames jumps to the latest frame,
-              and playback waits at the boundary for new frames.
+        live: If True, auto-plays and waits at the boundary for new frames.
         **s3_kwds: S3 credentials for ROS3 driver (s3_access_key, s3_secret_key).
     """
     mesh = load_mesh(h5_path, **s3_kwds)
@@ -448,11 +483,12 @@ def create_player(h5_path: str, live: bool = False, **s3_kwds) -> RealtimeTDGLWi
     return player
 
 
-def watch_run(store, run_id: str, poll_interval: int = 15, argo_host: str | None = None) -> StreamingTDGLPlayer:
+def watch_run(
+    store, run_id: str, poll_interval: int = 15, argo_host: str | None = None
+) -> StreamingTDGLPlayer:
     """Create a streaming player that watches a running simulation in MinIO.
 
     Reads HDF5 directly via ROS3 — no local download needed.
-    Polls for new frames and rebuilds the player when frames appear.
     """
     return StreamingTDGLPlayer(store, run_id, poll_interval, argo_host=argo_host)
 
@@ -463,26 +499,6 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
     Simulates human interaction: play, random seek, pause, stop.
     Checks frame data and I-V at each step.
     Returns a structured result dict for the agent — no visual output.
-
-    Returns:
-        {
-            "passed": bool,
-            "h5_path": str,
-            "total_frames": int,
-            "steps": [
-                {"action": "play", "ok": true, "status": {...}},
-                {"action": "seek", "frame": 42, "ok": true, "frame_data": {...}},
-                ...
-            ],
-            "errors": [str, ...],  # only if passed=False
-        }
-
-    Usage:
-        from tdgl_sdk.viewer import debug_player
-        result = debug_player("sim_output.h5")
-        if not result["passed"]:
-            for e in result["errors"]:
-                print(e)
     """
     import random
 
@@ -525,7 +541,7 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
     # Step 2: play for a few frames
     try:
         player.play()
-        time.sleep(min(0.5, total * 0.05))  # let it run a bit
+        time.sleep(min(0.5, total * 0.05))
         player.pause()
         status = player.get_status()
         step = {"action": "play_pause", "ok": True, "status": status}
@@ -538,7 +554,7 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
         steps.append({"action": "play_pause", "ok": False, "error": str(exc)})
         errors.append(f"play/pause failed: {exc}")
 
-    # Step 3: random seeks — like clicking the progress bar
+    # Step 3: random seeks
     seek_indices = _pick_seek_targets(total, rng, n=4)
     for idx in seek_indices:
         try:
@@ -596,7 +612,7 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
         steps.append({"action": "check_iv", "ok": False, "error": str(exc)})
         errors.append(f"I-V check failed: {exc}")
 
-    # Step 5: seek beyond available frames (like clicking far ahead on progress bar)
+    # Step 5: seek beyond available
     beyond_idx = total + 50
     try:
         player.show(beyond_idx, wait=False)
@@ -615,7 +631,7 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
         steps.append({"action": "seek_beyond", "ok": False, "error": str(exc)})
         errors.append(f"seek beyond failed: {exc}")
 
-    # Step 6: stop (rewind to frame 0)
+    # Step 6: stop
     try:
         player.stop()
         status = player.get_status()
@@ -627,7 +643,6 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
         steps.append({"action": "stop", "ok": False, "error": str(exc)})
         errors.append(f"stop failed: {exc}")
 
-    # Cleanup
     player.iv_cache.stop()
 
     return {
@@ -640,7 +655,6 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
 
 
 def _pick_seek_targets(total, rng, n=4):
-    """Pick n random frame indices spread across the file."""
     if total <= n + 1:
         return list(range(total))
     targets = set()
