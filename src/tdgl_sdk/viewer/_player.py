@@ -271,7 +271,10 @@ class RealtimeTDGLWidgetPlayer:
 
 
 class StreamingTDGLPlayer:
-    """Watches a run in MinIO and auto-updates the viewer as new frames arrive."""
+    """Watches a run in MinIO and auto-updates the viewer as new frames arrive.
+
+    Reads HDF5 directly from MinIO via ROS3 — no local download needed.
+    """
 
     def __init__(self, store, run_id, poll_interval=15, argo_host=None):
         if widgets is None:
@@ -284,7 +287,11 @@ class StreamingTDGLPlayer:
         self._stop_event = threading.Event()
         self._poll_thread = None
         self._player = None
-        self._h5_path = None
+        self._s3_kwds = {
+            "s3_access_key": store.s3._request_signer._credentials.access_key,
+            "s3_secret_key": store.s3._request_signer._credentials.secret_key,
+        }
+        self._h5_url = store.h5_url(run_id)
 
         self.status_label = widgets.Label(value="connecting...")
         self.stop_btn = widgets.Button(description="Stop watching", icon="eye-slash")
@@ -323,16 +330,19 @@ class StreamingTDGLPlayer:
                 status = manifest.get("status", "unknown")
 
                 if status in ("running", "completed"):
-                    h5_path = self.store.download_h5(self.run_id)
-                    if h5_path is None:
+                    try:
+                        with h5open(self._h5_url, "r", **self._s3_kwds) as f:
+                            n_frames = len(f["data"].keys()) if "data" in f else 0
+                    except Exception:
+                        n_frames = 0
+
+                    if n_frames == 0:
                         self.status_label.value = f"{status} — waiting for HDF5..."
                         self._stop_event.wait(self.poll_interval)
                         continue
-                    with h5open(h5_path, "r") as f:
-                        n_frames = len(f["data"].keys())
 
-                    if self._player is None or self._h5_path != h5_path:
-                        self._rebuild_player(h5_path, n_frames, status)
+                    if self._player is None:
+                        self._rebuild_player(n_frames, status)
                     else:
                         self._update_frame_count(n_frames, status)
 
@@ -367,7 +377,7 @@ class StreamingTDGLPlayer:
         except Exception:
             return "unknown"
 
-    def _rebuild_player(self, h5_path, n_frames, status):
+    def _rebuild_player(self, n_frames, status):
         from IPython.display import clear_output
 
         with self.output:
@@ -376,12 +386,11 @@ class StreamingTDGLPlayer:
             self._player.pause()
             self._player.iv_cache.stop()
 
-        self._h5_path = h5_path
         if n_frames == 0:
             self.status_label.value = f"{status} — waiting for frames..."
             return
 
-        self._player = create_player(h5_path)
+        self._player = create_player(self._h5_url, live=(status == "running"), **self._s3_kwds)
         self.status_label.value = f"{status} — {n_frames} frames"
         with self.output:
             clear_output(wait=True)
@@ -412,7 +421,7 @@ class StreamingTDGLPlayer:
         result = {
             "run_id": self.run_id,
             "watching": not self._stop_event.is_set(),
-            "h5_downloaded": self._h5_path is not None,
+            "h5_url": self._h5_url,
         }
         if self._player is not None:
             result["player"] = self._player.get_status()
@@ -440,9 +449,12 @@ def create_player(h5_path: str, live: bool = False, **s3_kwds) -> RealtimeTDGLWi
 
 
 def watch_run(store, run_id: str, poll_interval: int = 15, argo_host: str | None = None) -> StreamingTDGLPlayer:
-    """Create a streaming player that watches a running simulation in MinIO."""
-    player = StreamingTDGLPlayer(store, run_id, poll_interval, argo_host=argo_host)
-    return player
+    """Create a streaming player that watches a running simulation in MinIO.
+
+    Reads HDF5 directly via ROS3 — no local download needed.
+    Polls for new frames and rebuilds the player when frames appear.
+    """
+    return StreamingTDGLPlayer(store, run_id, poll_interval, argo_host=argo_host)
 
 
 def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
