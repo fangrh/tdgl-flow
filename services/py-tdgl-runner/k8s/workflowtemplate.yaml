@@ -22,11 +22,6 @@ spec:
         value: "{}"
       - name: solver-options-json
         value: "{}"
-      - name: cpu
-        value: "2"
-      - name: memory
-        value: "4Gi"
-
   templates:
     - name: simulation-pipeline
       steps:
@@ -97,11 +92,11 @@ spec:
             value: "tdgl-results"
         resources:
           requests:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
+            cpu: "2"
+            memory: "4Gi"
           limits:
-            cpu: "{{workflow.parameters.cpu}}"
-            memory: "{{workflow.parameters.memory}}"
+            cpu: "2"
+            memory: "4Gi"
         volumeMounts:
           - name: run-data
             mountPath: /data
