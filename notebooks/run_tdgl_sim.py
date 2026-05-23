@@ -8,7 +8,7 @@ Usage:
 
 Prerequisites:
     pip install hera-workflows boto3 httpx h5py numpy scipy pillow matplotlib tdgl
-    kubectl port-forward -n argo svc/argo-workflows-server 2746:2746
+    Argo Workflows accessible at localhost:30080 (nginx ingress)
     kubectl port-forward -n tdgl svc/minio 30900:9000
 """
 import json
@@ -27,7 +27,7 @@ from hera.workflows.models import WorkflowTemplateRef as WTR
 from tdgl_sdk import TDGLRunStore
 
 # ── Configuration ──────────────────────────────────────────────────────
-GATEWAY = "http://localhost:2746"
+GATEWAY = "http://localhost:30080"
 MINIO_ENDPOINT = "http://localhost:30900"
 MINIO_ACCESS_KEY = "minioadmin"
 MINIO_SECRET_KEY = "minioadmin123"
