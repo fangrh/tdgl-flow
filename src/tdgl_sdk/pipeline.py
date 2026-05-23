@@ -74,3 +74,48 @@ class SimulationPipeline:
         return WorkflowsService(
             host=self.argo_url, verify_ssl=False, namespace=self.namespace
         )
+
+    def poll(self, wf_name: str, timeout: int = 600) -> str:
+        """Poll workflow until it completes. Returns final phase."""
+        hint_map = {
+            "Submitted": "Scheduling...",
+            "Pending": "Pulling image...",
+            "Running": "Running...",
+        }
+        start = time.time()
+        while True:
+            elapsed = time.time() - start
+            if elapsed > timeout:
+                raise TimeoutError(
+                    f"Workflow {wf_name} did not complete within {timeout}s"
+                )
+
+            url = f"{self.argo_url}/api/v1/workflows/{self.namespace}/{wf_name}"
+            resp = httpx.get(url, verify=False, timeout=10)
+            resp.raise_for_status()
+            phase = (resp.json().get("status") or {}).get("phase", "Unknown")
+
+            if phase == "Succeeded":
+                return phase
+            elif phase in {"Failed", "Error"}:
+                try:
+                    logs_resp = httpx.get(
+                        f"{self.argo_url}/api/v1/workflows/{self.namespace}/{wf_name}/log"
+                        "?logOptions.container=main&logOptions.tailLines=30",
+                        verify=False, timeout=10,
+                    )
+                    print(f"  Logs:\n{logs_resp.text[:3000]}")
+                except Exception:
+                    pass
+                raise RuntimeError(f"Workflow {wf_name} {phase}")
+
+            hint = hint_map.get(phase, "Processing...")
+            print(f"  [{phase}] {hint} ({elapsed:.0f}s)")
+            time.sleep(5)
+
+    def download(self, run_id: str) -> str:
+        """Download the HDF5 result for a run. Returns local file path."""
+        h5_path = self.store.download_h5(run_id)
+        if h5_path is None:
+            raise FileNotFoundError(f"No HDF5 found for run {run_id}")
+        return h5_path
