@@ -7,6 +7,9 @@ spec:
   serviceAccountName: argo-workflow
   entrypoint: simulation-pipeline
   activeDeadlineSeconds: 7200
+  workflowMetadata:
+    labels:
+      run-id: "{{workflow.parameters.run-id}}"
   arguments:
     parameters:
       - name: run-id
