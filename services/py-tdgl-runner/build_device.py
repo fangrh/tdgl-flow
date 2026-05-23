@@ -19,7 +19,7 @@ def main():
     data_dir = os.environ.get("DATA_DIR", "/data")
     os.makedirs(data_dir, exist_ok=True)
 
-    _, device = build_rectangular_device(
+    mesh_data, device = build_rectangular_device(
         film_width=device_params["film_width"],
         film_height=device_params["film_height"],
         elec_width=device_params["elec_width"],
@@ -30,13 +30,16 @@ def main():
         smooth=device_params.get("smooth", 100),
     )
 
+    mesh_meta_path = os.path.join(data_dir, "mesh_meta.json")
+    with open(mesh_meta_path, "w") as f:
+        json.dump(mesh_data, f)
+
     device_path = os.path.join(data_dir, "device.pkl")
     with open(device_path, "wb") as f:
         pickle.dump(device, f)
 
-    pts = device.points
-    print(f"Device built: {len(pts)} sites, {len(device.triangles)} elements")
-    print(f"Artifact: {device_path}")
+    print(f"Device built: {mesh_data['num_sites']} sites, {mesh_data['num_elements']} elements")
+    print(f"Artifacts: {mesh_meta_path}, {device_path}")
 
 
 if __name__ == "__main__":

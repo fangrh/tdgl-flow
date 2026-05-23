@@ -1,3 +1,3 @@
-from tdgl_sdk.client import TDGLClient
+from tdgl_sdk.client import TDGLClient, TDGLRunStore
 
-__all__ = ["TDGLClient"]
+__all__ = ["TDGLClient", "TDGLRunStore"]

@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - deployment.yaml
   - service.yaml
+  - workflowtemplate.yaml
 
 commonLabels:
   app: py-tdgl-runner
