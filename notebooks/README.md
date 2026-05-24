@@ -1,26 +1,13 @@
 # Notebooks
 
-This directory keeps checked-in notebooks and notebook-style scripts that are useful for TDGL development and demos.
+Only the notebooks needed for the py-tdgl workflow are kept in git.
 
-## Main notebooks
+- `e2e_sim_test.py`: main end-to-end test. It submits `py-tdgl-sim`, watches the growing HDF5 in MinIO, and opens the live local viewer.
+- `009-native-widget-player.ipynb`: local widget-player experiment for testing the notebook viewer controls.
 
-- `e2e_sim_test.py`: end-to-end py-tdgl workflow submission, live MinIO viewer, verification, and static playback checks.
-- `010-minio-run-viewer.ipynb`: MinIO-backed run viewer.
-- `device_builder.ipynb` / `device_builder.py`: device construction workflow.
-- `timing_sim.ipynb`: timing schedule exploration.
-- `local_tdgl_sim.ipynb`: local TDGL simulation exploration.
-- `tdgl_demo.ipynb`: compact TDGL demo.
-- `frame_player.ipynb`: frame playback checks.
-- `test_heatmap_viewer.ipynb`: heatmap viewer experiment.
-- `argo_workflow_demo.ipynb` / `argo_workflow_demo.py`: Argo workflow demo.
-- `run_tdgl_sim.py`: simple script entry point for simulation runs.
+Device construction is kept as part of the py-tdgl preprocessing path. The main
+workflow runs `build_device.py` before timing and simulation, and
+`workflows/rectangle-device-builder.yaml` remains available for standalone
+device-builder checks.
 
-## Local-only folders
-
-The following folders are intentionally ignored by git:
-
-- `artifacts/`: generated HDF5 files, HTML players, downloaded outputs.
-- `experimental/`: exploratory notebooks that are not part of the stable workflow.
-- `scratch/`: one-off helper scripts and temporary diagnostics.
-
-Jupyter, Marimo, Python cache, and ystore files are also ignored.
+Generated HDF5 files, downloaded outputs, Jupyter checkpoints, ystore files, Marimo state, and scratch notebooks are local-only and ignored by git.

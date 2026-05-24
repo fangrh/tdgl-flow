@@ -11,6 +11,10 @@ bind/
 .gstack/
 
 # Local notebook/runtime artifacts
+.ipynb_checkpoints/
+.jupyter/
+.virtual_documents/
+.jupyter_ystore.db
 notebooks/.ipynb_checkpoints/
 notebooks/.jupyter/
 notebooks/.virtual_documents/

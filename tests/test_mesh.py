@@ -4,7 +4,7 @@ import pytest
 def test_build_rectangular_device_returns_mesh_data():
     from tdgl_workflow.mesh import build_rectangular_device
 
-    result = build_rectangular_device(
+    result, device = build_rectangular_device(
         film_width=10.0,
         film_height=2.0,
         elec_width=0.5,
@@ -16,6 +16,7 @@ def test_build_rectangular_device_returns_mesh_data():
     )
 
     assert "sites" in result
+    assert device is not None
     assert "elements" in result
     assert "probe_indices" in result
     assert "num_sites" in result
@@ -31,7 +32,7 @@ def test_build_rectangular_device_returns_mesh_data():
 def test_build_rectangular_device_probe_indices_valid():
     from tdgl_workflow.mesh import build_rectangular_device
 
-    result = build_rectangular_device(
+    result, _device = build_rectangular_device(
         film_width=10.0,
         film_height=2.0,
         elec_width=0.5,

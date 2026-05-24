@@ -34,7 +34,9 @@ jobs:
           python -m pytest -q \
             tests/test_py_runner_timeline.py \
             tests/test_viewer_diagnostics.py \
-            tests/test_timing.py
+            tests/test_timing.py \
+            tests/test_mesh.py \
+            tests/test_pipeline.py
 
   build-and-push:
     runs-on: ubuntu-latest
@@ -60,77 +62,21 @@ jobs:
           fi
           CHANGES=$(git diff --name-only "$BASE" HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD)
           echo "$CHANGES"
-          VIEWER=false
-          GENERATOR=false
-          WORKFLOW=false
-          RUNNER=false
-          VIEWER_MGR=false
           PY_RUNNER=false
-          echo "$CHANGES" | grep -qE "^(src/tdgl_data/|services/data-viewer/)" && VIEWER=true
-          echo "$CHANGES" | grep -qE "^(src/tdgl_data/synthetic\.py|src/tdgl_generator/|services/generator/)" && GENERATOR=true
-          echo "$CHANGES" | grep -qE "^(src/tdgl_workflow/|services/tdgl-workflow/|pyproject.toml)" && WORKFLOW=true
-          echo "$CHANGES" | grep -qE "^(services/cpp-tdgl-runner/|src/cpp-tdgl/)" && RUNNER=true
-          echo "$CHANGES" | grep -qE "^(src/viewer_manager/|services/viewer-manager/)" && VIEWER_MGR=true
-          echo "$CHANGES" | grep -qE "^(services/py-tdgl-runner/|src/tdgl_sdk/|src/tdgl_workflow/)" && PY_RUNNER=true
+          echo "$CHANGES" | grep -qE "^(services/py-tdgl-runner/|src/tdgl_sdk/|src/tdgl_workflow/|pyproject.toml)" && PY_RUNNER=true
           # Shared library changes rebuild py-runner because its image vendors them.
           echo "$CHANGES" | grep -qE "^src/tdgl_sdk/" && PY_RUNNER=true
           echo "$CHANGES" | grep -qE "^src/tdgl_workflow/" && PY_RUNNER=true
-          echo "build_viewer=$VIEWER" >> "$GITHUB_OUTPUT"
-          echo "build_generator=$GENERATOR" >> "$GITHUB_OUTPUT"
-          echo "build_workflow=$WORKFLOW" >> "$GITHUB_OUTPUT"
-          echo "build_runner=$RUNNER" >> "$GITHUB_OUTPUT"
-          echo "build_viewer_mgr=$VIEWER_MGR" >> "$GITHUB_OUTPUT"
           echo "build_py_runner=$PY_RUNNER" >> "$GITHUB_OUTPUT"
           echo "Py-runner changed: $PY_RUNNER"
-          echo "Viewer changed: $VIEWER"
-          echo "Generator changed: $GENERATOR"
-          echo "Workflow changed: $WORKFLOW"
-          echo "Runner changed: $RUNNER"
-          echo "Viewer-manager changed: $VIEWER_MGR"
 
       - name: Log in to GHCR
-        if: steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true' || steps.changes.outputs.build_workflow == 'true' || steps.changes.outputs.build_runner == 'true' || steps.changes.outputs.build_viewer_mgr == 'true' || steps.changes.outputs.build_py_runner == 'true'
+        if: steps.changes.outputs.build_py_runner == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push data-viewer
-        if: steps.changes.outputs.build_viewer == 'true'
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          docker build -f services/data-viewer/Dockerfile \
-            -t ghcr.io/fangrh/tdgl-data-viewer:$SHA \
-            .
-          docker push ghcr.io/fangrh/tdgl-data-viewer:$SHA
-
-      - name: Build and push generator
-        if: steps.changes.outputs.build_generator == 'true'
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          docker build -f services/generator/Dockerfile \
-            -t ghcr.io/fangrh/tdgl-generator:$SHA \
-            .
-          docker push ghcr.io/fangrh/tdgl-generator:$SHA
-
-      - name: Build and push tdgl-workflow
-        if: steps.changes.outputs.build_workflow == 'true'
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          docker build -f services/tdgl-workflow/Dockerfile \
-            -t ghcr.io/fangrh/tdgl-workflow:$SHA \
-            .
-          docker push ghcr.io/fangrh/tdgl-workflow:$SHA
-
-      - name: Build and push cpp-tdgl-runner
-        if: steps.changes.outputs.build_runner == 'true'
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          docker build -f services/cpp-tdgl-runner/Dockerfile \
-            -t ghcr.io/fangrh/cpp-tdgl-runner:$SHA \
-            .
-          docker push ghcr.io/fangrh/cpp-tdgl-runner:$SHA
 
       - name: Build and push py-tdgl-runner
         if: steps.changes.outputs.build_py_runner == 'true'
@@ -141,48 +87,15 @@ jobs:
             .
           docker push ghcr.io/fangrh/py-tdgl-runner:$SHA
 
-      - name: Build and push viewer-manager
-        if: steps.changes.outputs.build_viewer_mgr == 'true'
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          docker build -f services/viewer-manager/Dockerfile \
-            -t ghcr.io/fangrh/viewer-manager:$SHA \
-            .
-          docker push ghcr.io/fangrh/viewer-manager:$SHA
-
       - name: Update manifest tags and commit
-        if: github.ref == 'refs/heads/main' && (steps.changes.outputs.build_viewer == 'true' || steps.changes.outputs.build_generator == 'true' || steps.changes.outputs.build_workflow == 'true' || steps.changes.outputs.build_runner == 'true' || steps.changes.outputs.build_viewer_mgr == 'true' || steps.changes.outputs.build_py_runner == 'true')
+        if: github.ref == 'refs/heads/main' && steps.changes.outputs.build_py_runner == 'true'
         run: |
           SHA=$(git rev-parse --short HEAD)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ "${{ steps.changes.outputs.build_viewer }}" = "true" ]; then
-            sed -i "s|image: ghcr.io/fangrh/tdgl-data-viewer:.*|image: ghcr.io/fangrh/tdgl-data-viewer:$SHA|" services/data-viewer/k8s/deployment.yaml
-            echo "Updated data-viewer tag to $SHA"
-          fi
-          if [ "${{ steps.changes.outputs.build_generator }}" = "true" ]; then
-            sed -i "s|ghcr.io/fangrh/tdgl-generator:[^\"]*|ghcr.io/fangrh/tdgl-generator:$SHA|g" services/generator/k8s/workflowtemplate.yaml
-            echo "Updated generator tag to $SHA"
-          fi
-          if [ "${{ steps.changes.outputs.build_workflow }}" = "true" ]; then
-            sed -i "s|image: ghcr.io/fangrh/tdgl-workflow:.*|image: ghcr.io/fangrh/tdgl-workflow:$SHA|" services/tdgl-workflow/k8s/deployment.yaml
-            echo "Updated tdgl-workflow tag to $SHA"
-          fi
-          if [ "${{ steps.changes.outputs.build_runner }}" = "true" ]; then
-            sed -i "s|ghcr.io/fangrh/cpp-tdgl-runner:[^\"]*|ghcr.io/fangrh/cpp-tdgl-runner:$SHA|g" workflows/cpp-tdgl-sim.yaml
-            echo "Updated cpp-tdgl-runner tag to $SHA"
-          fi
-          if [ "${{ steps.changes.outputs.build_viewer_mgr }}" = "true" ]; then
-            sed -i "s|image: ghcr.io/fangrh/viewer-manager:.*|image: ghcr.io/fangrh/viewer-manager:$SHA|" services/viewer-manager/k8s/deployment.yaml
-            sed -i "s|image: ghcr.io/fangrh/viewer-manager:.*|image: ghcr.io/fangrh/viewer-manager:$SHA|" services/viewer-manager/k8s/migrate-job.yaml
-            echo "Updated viewer-manager tag to $SHA"
-          fi
-          if [ "${{ steps.changes.outputs.build_py_runner }}" = "true" ]; then
-            sed -i "s|image: ghcr.io/fangrh/py-tdgl-runner:.*|image: ghcr.io/fangrh/py-tdgl-runner:$SHA|" services/py-tdgl-runner/k8s/deployment.yaml
-            sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" services/py-tdgl-runner/k8s/workflowtemplate.yaml
-            sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" workflows/rectangle-device-builder.yaml
-            echo "Updated py-tdgl-runner tag to $SHA"
-          fi
-          git add services/data-viewer/k8s/deployment.yaml services/generator/k8s/workflowtemplate.yaml services/py-tdgl-runner/k8s/deployment.yaml services/py-tdgl-runner/k8s/workflowtemplate.yaml services/tdgl-workflow/k8s/deployment.yaml services/viewer-manager/k8s/deployment.yaml services/viewer-manager/k8s/migrate-job.yaml workflows/cpp-tdgl-sim.yaml workflows/rectangle-device-builder.yaml
+          sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" services/py-tdgl-runner/k8s/workflowtemplate.yaml
+          sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" workflows/rectangle-device-builder.yaml
+          echo "Updated py-tdgl-runner tag to $SHA"
+          git add services/py-tdgl-runner/k8s/workflowtemplate.yaml workflows/rectangle-device-builder.yaml
           git diff --cached --quiet || git commit -m "ci: update image tags to $SHA"
           git push

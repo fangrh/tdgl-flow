@@ -4,7 +4,7 @@ ARGOCD_NS   := argocd
 ARGO_VALUES := infra/argo-workflows/helm-values.yaml
 ARGOCD_VALUES := clusters/argocd/helm-values.yaml
 
-.PHONY: install-argo verify-argo submit-workflow run-generator install-argocd verify-argocd gateway apply status disable-traefik
+.PHONY: install-argo verify-argo submit-workflow submit-py-workflow install-argocd verify-argocd gateway apply status disable-traefik
 
 # Cluster bootstrap
 
@@ -43,9 +43,9 @@ gateway:
 	@echo "Or via WSL IP: http://$(shell hostname -I | awk '{print $$1}'):30080"
 	@echo ""
 	@echo "Services:"
-	@echo "  /tdgl/       → TDGL Data Viewer"
 	@echo "  /argocd/     → ArgoCD Dashboard"
 	@echo "  /workflows/  → Argo Workflows UI"
+	@echo "  MinIO is exposed through the tdgl-minio service; use notebooks/e2e_sim_test.py for local viewing."
 
 apply:
 	kubectl apply -k clusters/argocd
@@ -80,12 +80,10 @@ verify-argo:
 	kubectl get workflowtemplates -n $(NAMESPACE)
 
 submit-workflow:
-	argo submit -n $(NAMESPACE) --from workflowtemplate/cpp-tdgl \
-		-p image=127.0.0.1:5050/cpp-tdgl:latest \
-		-p config-json='{}'
+	@echo "Use notebooks/e2e_sim_test.py for parameterized py-tdgl submissions."
 
-run-generator:
-	argo submit -n $(NAMESPACE) --from workflowtemplate/tdgl-generator
+submit-py-workflow:
+	argo submit -n $(NAMESPACE) --from workflowtemplate/py-tdgl-sim
 
 # Traefik management
 

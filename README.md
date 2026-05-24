@@ -1,83 +1,67 @@
 # kubeflow-tdgl
 
-Kubeflow-oriented TDGL (Time-Dependent Ginzburg-Landau) simulation platform
-with a browser-based heatmap viewer.
+Minimal end-to-end TDGL simulation workflow:
 
-## TDGL Data Service
+1. Submit an Argo Workflow from a local notebook.
+2. Build a rectangular py-tdgl device inside the workflow.
+3. Build the current schedule.
+4. Run py-tdgl.
+5. Periodically upload the growing HDF5 output to MinIO.
+6. Read the HDF5 directly from MinIO in a local notebook viewer.
 
-FastAPI application that manages simulation data in PostgreSQL. Includes a built-in heatmap viewer.
+There is no in-cluster data viewer, generator, viewer manager, database-backed data
+service, or C++ runner in this trimmed version.
 
-- REST API for run and frame CRUD
-- PostgreSQL-compatible metadata schema with SQLAlchemy ORM
-- Browser heatmap viewer with Plotly rendering and frame buffering
-- Server-Sent Events for real-time frame availability notifications
-- Synthetic data generation for testing and UI prototyping
-- K8s manifests for PostgreSQL StatefulSet + data service Deployment
+## Key Files
 
-## Development
+- `notebooks/e2e_sim_test.py`: main end-to-end workflow test and live viewer.
+- `notebooks/009-native-widget-player.ipynb`: local widget-player experiment.
+- `services/py-tdgl-runner/`: image used by the Argo workflow.
+- `services/py-tdgl-runner/k8s/workflowtemplate.yaml`: `py-tdgl-sim` workflow template.
+- `workflows/rectangle-device-builder.yaml`: standalone device-builder preprocessing workflow for py-tdgl.
+- `src/tdgl_workflow/mesh.py`: rectangular device construction helper.
+- `src/tdgl_workflow/timing.py`: timing schedule builder.
+- `src/tdgl_sdk/`: notebook-facing pipeline, MinIO access, diagnostics, and viewer.
+- `infra/`: namespace, Argo Workflows values, MinIO, and local nginx gateway.
+
+## Local Setup
+
+Install Python dependencies:
 
 ```bash
 python -m pip install -e ".[dev]"
-pytest
 ```
 
-Run the dev server (auto-creates SQLite schema):
+Forward the services used by `notebooks/e2e_sim_test.py`:
 
 ```bash
-uvicorn tdgl_data.dev_app:create_dev_app --factory --reload
+kubectl port-forward -n tdgl svc/nginx-ingress 30080:80
+kubectl port-forward -n tdgl svc/minio 30900:9000
 ```
 
-Open http://127.0.0.1:8000/viewer — click **Create demo** to generate
-synthetic frames and inspect |psi| and mu heatmaps.
+Run the notebook cells in:
 
-## API Endpoints
+```text
+notebooks/e2e_sim_test.py
+```
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/viewer` | Browser heatmap viewer |
-| GET | `/api/runs` | List runs |
-| POST | `/api/runs` | Create run |
-| POST | `/api/demo-runs` | Create synthetic demo run |
-| GET | `/api/runs/{id}` | Get run |
-| DELETE | `/api/runs/{id}` | Delete run |
-| GET | `/api/runs/{id}/timeline` | Frame metadata + global stats |
-| GET | `/api/runs/{id}/iv` | I-V curve points |
-| GET | `/api/runs/{id}/frames/{idx}` | Full frame arrays |
-| POST | `/api/runs/{id}/frames` | Append frame |
-| GET | `/api/runs/{id}/events` | SSE stream of frame events |
-
-## Kubernetes Deployment
+## Verification
 
 ```bash
-# Build images
-docker build -f services/data-viewer/Dockerfile -t ghcr.io/fangrh/tdgl-data-viewer:latest .
-docker build -f services/generator/Dockerfile -t ghcr.io/fangrh/tdgl-generator:latest .
-
-# Deploy infrastructure
-kubectl apply -f infra/namespace.yaml
-kubectl apply -f infra/postgresql/k8s/
-
-# Deploy services
-kubectl apply -f services/data-viewer/k8s/
-
-# Port-forward to access viewer
-kubectl port-forward -n tdgl svc/data-viewer 8000:80
+python -m pytest -q tests/test_py_runner_timeline.py tests/test_viewer_diagnostics.py tests/test_timing.py tests/test_mesh.py tests/test_pipeline.py
 ```
 
-## Project Structure
+## Deployment
 
+The GitHub Actions workflow builds and pushes only:
+
+```text
+ghcr.io/fangrh/py-tdgl-runner:<sha>
 ```
-tdgl_data/                Shared library (models, schemas, API, synthetic)
-tdgl_generator/           Generator package (CLI + web app)
-services/
-  data-viewer/            Data service + viewer
-    Dockerfile
-    k8s/                  deployment, service, secret
-  generator/              Test data generator
-    Dockerfile
-    k8s/                  job manifest
-infra/
-  namespace.yaml
-  postgresql/k8s/         statefulset, pvc, service, secret
-tests/                    pytest test suite
-```
+
+After a successful build on `main`, CI updates:
+
+- `services/py-tdgl-runner/k8s/workflowtemplate.yaml`
+- `workflows/rectangle-device-builder.yaml`
+
+ArgoCD sync then applies the new workflow template to the cluster.
