@@ -1,39 +1,31 @@
 import time
+from pathlib import Path
 
 
 class DebugLog:
-    """Lightweight timestamped event logger for live player debugging.
+    """File-based event logger for live player debugging.
 
-    Not the same as the agent diagnostic API (get_status, diagnose_mapping).
-    This records a timeline of events as they happen; the agent API returns
-    point-in-time snapshots.
+    When debug=True, every log() call immediately appends to a local file
+    so the log can be read at any time during or after the simulation.
     """
 
-    def __init__(self, max_entries=10000):
-        self.entries = []
-        self._max = max_entries
+    def __init__(self, path="debug-tdgl.log"):
+        self._path = Path(path)
         self._t0 = time.perf_counter()
+        self._fh = open(self._path, "w")
+        self._fh.write(f"=== DebugLog started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        self._fh.flush()
 
     def log(self, event, **data):
         ts = time.perf_counter() - self._t0
-        self.entries.append((ts, event, data))
-        if len(self.entries) > self._max:
-            self.entries = self.entries[-self._max // 2:]
+        parts = ", ".join(f"{k}={v!r}" for k, v in data.items())
+        self._fh.write(f"[{ts:8.3f}s] {event}  {parts}\n")
+        self._fh.flush()
 
-    def clear(self):
-        self.entries.clear()
-        self._t0 = time.perf_counter()
+    def close(self):
+        if self._fh and not self._fh.closed:
+            self._fh.close()
 
-    def dump(self, last_n=None):
-        items = self.entries[-last_n:] if last_n else self.entries
-        lines = []
-        for ts, event, data in items:
-            parts = ", ".join(f"{k}={v!r}" for k, v in data.items())
-            lines.append(f"[{ts:8.3f}s] {event}  {parts}")
-        return "\n".join(lines)
-
-    def recent(self, n=20):
-        return self.entries[-n:]
-
-    def __len__(self):
-        return len(self.entries)
+    @property
+    def path(self):
+        return str(self._path)

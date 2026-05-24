@@ -125,10 +125,14 @@ if "player" in status:
 
 #%%
 # ── Step 3b: Debug log ─────────────────────────────────────────────────
-# View the debug log to trace what the player is doing.
+# Debug log is written to a local file. Read it anytime during/after simulation.
 log = live_player.debug_log
 if log:
-    print(log.dump(last_n=40))
+    print(f"Debug log: {log.path}")
+    with open(log.path) as f:
+        lines = f.readlines()
+    for line in lines[-40:]:
+        print(line, end="")
 else:
     print("Debug not enabled (pass debug=True to watch_live)")
 
@@ -161,7 +165,7 @@ import base64
 from tdgl_workflow.timing import build_timing
 
 _timing = build_timing(**TIMING_PARAMS)
-player = create_player(h5_url, timing_steps=_timing.get("steps", []), **s3_kwds)
+player = create_player(h5_url, timing_steps=_timing.get("steps", []), debug=True, **s3_kwds)
 print(f"Player: {player.total} frames")
 
 def show_frame(idx):
