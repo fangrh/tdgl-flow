@@ -62,6 +62,13 @@ print(f"  Timing: Je {TIMING_PARAMS['je_initial']}->{TIMING_PARAMS['je_final']},
 print(f"  Solver: save_every={SOLVER_OPTIONS['save_every']}")
 
 #%%
+# ── Step 0: Clear MinIO (optional) ───────────────────────────────────────
+# Uncomment to delete all previous simulation data from MinIO.
+# pipeline = SimulationPipeline(argo_url=ARGO_URL, minio_endpoint=MINIO_ENDPOINT)
+# deleted = pipeline.store.clear_all_runs()
+# print(f"Deleted {deleted} objects from MinIO")
+
+#%%
 # ── Step 1: Create pipeline and submit ──────────────────────────────────
 pipeline = SimulationPipeline(
     argo_url=ARGO_URL,
@@ -88,6 +95,7 @@ live_player = pipeline.watch_live(
     run_id, poll_interval=10,
     timing_params=TIMING_PARAMS,
     solver_options=SOLVER_OPTIONS,
+    debug=True,
 )
 live_player.display_player()
 
@@ -114,6 +122,15 @@ print(f"\nLive viewer: watching={status['watching']}, url={status['h5_url']}")
 if "player" in status:
     p = status["player"]
     print(f"  Frames: {p['available_frames']}, Step: {p['current_step']}/{p['total_steps']}, Playing: {p['playing']}")
+
+#%%
+# ── Step 3b: Debug log ─────────────────────────────────────────────────
+# View the debug log to trace what the player is doing.
+log = live_player.debug_log
+if log:
+    print(log.dump(last_n=40))
+else:
+    print("Debug not enabled (pass debug=True to watch_live)")
 
 #%%
 # ── Step 4: Poll until complete (blocks) ────────────────────────────────
