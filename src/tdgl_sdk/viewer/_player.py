@@ -115,12 +115,19 @@ class RealtimeTDGLWidgetPlayer:
     def _ensure_frame_time(self, idx):
         if idx < len(self.frame_times):
             return
-        # Try IV cache first to avoid HDF5 network round-trip
+        # Try IV cache / _frame_iv_cache first to avoid HDF5 network round-trip
         with self.iv_cache.lock:
-            if idx < len(self.iv_cache.t):
-                while len(self.frame_times) <= idx:
-                    i = len(self.frame_times)
+            while len(self.frame_times) <= idx:
+                i = len(self.frame_times)
+                if i < len(self.iv_cache.t):
                     self.frame_times.append(self.iv_cache.t[i])
+                else:
+                    cached = self.iv_cache._frame_iv_cache.get(i)
+                    if cached is not None:
+                        self.frame_times.append(cached[2])
+                    else:
+                        break
+            if idx < len(self.frame_times):
                 return
         with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             for i in range(len(self.frame_times), min(idx + 1, self.total)):

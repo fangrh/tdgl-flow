@@ -135,9 +135,14 @@ class IVCache:
         idx = int(idx)
         timing_steps = self._timing_steps or []
 
-        # Use IV cache time instead of opening HDF5 when possible
+        # Get frame time: check self.t first, then _frame_iv_cache (populated
+        # by _step_average_worker), fall back to HDF5 only as last resort.
         with self.lock:
-            current_time = self.t[idx] if 0 <= idx < len(self.t) else None
+            if 0 <= idx < len(self.t):
+                current_time = self.t[idx]
+            else:
+                cached_iv = self._frame_iv_cache.get(idx)
+                current_time = cached_iv[2] if cached_iv else None
         if current_time is None:
             with h5open(self.h5_path, "r", **self._s3_kwds) as f:
                 current_time = float(f[f"data/{idx}"].attrs.get("time", idx))
