@@ -227,16 +227,37 @@ def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
 
 
 def _draw_vt(draw, iv_cache, idx, box, debug_log=None):
-    """Draw voltage vs time plot with a playback position dot."""
+    """Draw voltage vs time for the current Je step, time starting at 0."""
     iv_cache.ensure(idx)
     _, V_all, t_all = iv_cache.arrays(upto=idx)
     if len(t_all) == 0:
         t_all = np.array([0.0, 1.0])
         V_all = np.array([0.0, 1.0])
 
-    valid = ~np.isnan(V_all)
-    t_valid = t_all[valid]
-    V_valid = V_all[valid]
+    # Find the current Je step from timing_steps
+    cur_t = t_all[-1] if len(t_all) else 0.0
+    timing_steps = getattr(iv_cache, "_timing_steps", None)
+    current_step = None
+    step_idx = 0
+    if timing_steps:
+        for si, step in enumerate(timing_steps):
+            if step["ramp_start"] <= cur_t < step["stable_end"]:
+                current_step = step
+                step_idx = si + 1
+                break
+
+    # Filter to current step, offset time to 0
+    if current_step is not None:
+        mask = (t_all >= current_step["ramp_start"]) & (t_all < current_step["stable_end"])
+        t_step = t_all[mask] - current_step["ramp_start"]
+        V_step = V_all[mask]
+    else:
+        t_step = t_all
+        V_step = V_all
+
+    valid = ~np.isnan(V_step)
+    t_valid = t_step[valid]
+    V_valid = V_step[valid]
     if len(t_valid) == 0:
         t_valid = np.array([0.0, 1.0])
         V_valid = np.array([0.0, 1.0])
@@ -287,3 +308,11 @@ def _draw_vt(draw, iv_cache, idx, box, debug_log=None):
         fill=(150, 150, 150),
     )
     draw.text((8, y0 + 70), "V", fill=(150, 150, 150))
+
+    # Step info
+    if timing_steps and current_step:
+        draw.text(
+            (right - 140, top + 4),
+            f"Je step {step_idx}/{len(timing_steps)}",
+            fill=(150, 150, 150),
+        )
