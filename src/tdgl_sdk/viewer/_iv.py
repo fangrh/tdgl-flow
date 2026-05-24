@@ -165,7 +165,10 @@ class IVCache:
                 _, local_times, voltages = cached
                 return local_times, voltages, step_idx, len(timing_steps)
 
-        # Cache miss — compute from HDF5
+        # Cache miss — expensive! Reads ALL frames in the step over network.
+        # Should never happen during normal playback because _step_average_worker
+        # pre-populates _vt_step_cache. If you see this during playback, the
+        # pre-computation hasn't finished yet or timing_steps was not provided.
         ramp_start = current_step["ramp_start"]
         stable_end = current_step["stable_end"]
         with h5open(self.h5_path, "r", **self._s3_kwds) as f:
@@ -342,7 +345,11 @@ class IVCache:
                             i_val = step["je_end"]
                         frame_vt.append((int(keys[i]), t_val, i_val, v_val))
 
-                    # Populate vt_step cache so playback never hits a cache miss
+                    # IMPORTANT: Pre-populate vt_step cache here to avoid playback stutter.
+                    # Without this, vt_step() would have a cache miss at every Je step
+                    # boundary (~every 8 frames), requiring a full HDF5 scan of all
+                    # frames in the new step over ROS3 (~200ms, far exceeding the 100ms
+                    # frame budget at 10 FPS). This is the #1 cause of periodic stutter.
                     vt_times = [fv[1] - ramp_start for fv in frame_vt]
                     vt_volts = [fv[3] for fv in frame_vt]
                     with self.lock:
