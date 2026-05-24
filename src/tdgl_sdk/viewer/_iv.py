@@ -374,6 +374,8 @@ class IVCache:
                         avg_i.append(float(np.mean([x[0] for x in values])))
                         avg_v.append(float(np.mean([x[1] for x in values])))
                     self._publish_step_average(avg_i, avg_v, len(steps))
+            with self.lock:
+                self._version += 1
         except Exception as exc:
             self._step_avg_error = exc
 
@@ -385,7 +387,6 @@ class IVCache:
                 len(avg_i),
                 total_steps,
             )
-            self._version += 1
 
     def set_timing_steps(self, steps, average_time=None):
         """Set timing step boundaries and averaging window for Je-step-averaged I-V.
