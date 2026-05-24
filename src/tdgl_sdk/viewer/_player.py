@@ -598,13 +598,14 @@ class StreamingTDGLPlayer:
 
     def _create_player(self, status):
         from IPython.display import clear_output
+        from tdgl_sdk.viewer._player_2x2 import create_player_2x2
 
         with self.output:
             clear_output(wait=True)
 
         timing_steps = self._compute_timing_steps()
 
-        self._player = create_player(
+        self._player = create_player_2x2(
             self._h5_url, live=(status == "running"),
             timing_steps=timing_steps,
             average_time=self._average_time,
