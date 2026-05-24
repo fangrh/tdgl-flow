@@ -1,7 +1,6 @@
 import pickle
 import threading
 
-import h5py
 import numpy as np
 
 from tdgl_sdk.viewer._mesh import h5open
@@ -16,6 +15,32 @@ def _load_terminal_currents(h5_path, **s3_kwds):
         return pickle.loads(blob)
     except Exception:
         return None
+
+
+def _extract_timing_steps_from_terminal_currents(tc_fn):
+    """Extract timing step metadata captured by the runner's current callback."""
+    if tc_fn is None or tc_fn.__closure__ is None:
+        return None
+
+    required = {"je_start", "je_end", "ramp_start", "ramp_end", "stable_end"}
+    for cell in tc_fn.__closure__:
+        try:
+            value = cell.cell_contents
+        except ValueError:
+            continue
+        if not isinstance(value, list) or not value:
+            continue
+        if not all(isinstance(step, dict) and required <= set(step) for step in value):
+            continue
+        return [dict(step) for step in value]
+    return None
+
+
+def load_timing_steps_from_solution(h5_path, **s3_kwds):
+    """Load timing steps embedded in a completed HDF5 solution, if available."""
+    return _extract_timing_steps_from_terminal_currents(
+        _load_terminal_currents(h5_path, **s3_kwds)
+    )
 
 
 class IVCache:
@@ -36,9 +61,17 @@ class IVCache:
         self.last_total = 0
         self.error = None
         self._timing_steps = None
+        self._average_time = None
+        self._step_avg_cache = None
+        self._step_avg_thread = None
+        self._step_avg_error = None
+        self._frame_iv_cache = {}
+        self._vt_step_cache = {}
+        self._version = 0
         self._debug = debug_log
 
         self._tc_fn = _load_terminal_currents(h5_path, **s3_kwds)
+        self._timing_steps = _extract_timing_steps_from_terminal_currents(self._tc_fn)
 
     def start(self):
         self.stop()
@@ -50,9 +83,10 @@ class IVCache:
         if self.thread and self.thread.is_alive():
             self.stop_event.set()
             self.thread.join(timeout=1)
+        if self._step_avg_thread and self._step_avg_thread.is_alive():
+            self._step_avg_thread.join(timeout=1)
 
-    def _frame_iv(self, f, idx):
-        d = f[f"data/{idx}"]
+    def _frame_iv_from_group(self, d, idx):
         t_val = float(d.attrs.get("time", idx))
 
         # Use terminal_currents from the solution pickle when available.
@@ -72,10 +106,93 @@ class IVCache:
             dt_rs = np.array(d["running_state/dt"])
             voltage_samples = mu_rs[0] - mu_rs[1]
             dt_sum = float(dt_rs.sum())
-            V_val = float(np.sum(voltage_samples * dt_rs) / dt_sum) if dt_sum > 0 else float(voltage_samples.mean())
+            if dt_sum > 0:
+                V_val = float(np.sum(voltage_samples * dt_rs) / dt_sum)
+            else:
+                V_val = float(voltage_samples.mean())
         except Exception:
             V_val = float("nan")
         return I_val, V_val, t_val
+
+    def _frame_iv(self, f, idx):
+        return self._frame_iv_from_group(f[f"data/{idx}"], idx)
+
+    def frame_iv(self, idx):
+        idx = int(idx)
+        with self.lock:
+            if 0 <= idx < len(self.I):
+                return self.I[idx], self.V[idx], self.t[idx]
+            cached = self._frame_iv_cache.get(idx)
+            if cached is not None:
+                return cached
+        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+            value = self._frame_iv(f, idx)
+        with self.lock:
+            self._frame_iv_cache[idx] = value
+        return value
+
+    def vt_step(self, idx):
+        idx = int(idx)
+        timing_steps = self._timing_steps or []
+
+        # Use IV cache time instead of opening HDF5 when possible
+        with self.lock:
+            current_time = self.t[idx] if 0 <= idx < len(self.t) else None
+        if current_time is None:
+            with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+                current_time = float(f[f"data/{idx}"].attrs.get("time", idx))
+
+        # Determine which timing step this frame belongs to
+        current_step = None
+        step_idx = 0
+        for si, step in enumerate(timing_steps):
+            if step["ramp_start"] <= current_time < step["stable_end"]:
+                current_step = step
+                step_idx = si + 1
+                break
+        if current_step is None and timing_steps and current_time >= timing_steps[-1]["stable_end"]:
+            current_step = timing_steps[-1]
+            step_idx = len(timing_steps)
+
+        if current_step is None:
+            _, v_all, t_all = self.arrays(upto=idx)
+            return t_all, v_all, 0, 0
+
+        # Return cached data if available — no HDF5 open needed
+        with self.lock:
+            cached = self._vt_step_cache.get(step_idx)
+            if cached is not None:
+                _, local_times, voltages = cached
+                return local_times, voltages, step_idx, len(timing_steps)
+
+        # Cache miss — compute from HDF5
+        ramp_start = current_step["ramp_start"]
+        stable_end = current_step["stable_end"]
+        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+            data = f["data"]
+            local_times = []
+            voltages = []
+            max_time = current_time
+            for key in sorted(data.keys(), key=lambda item: int(item)):
+                frame_idx = int(key)
+                group = data[key]
+                t_val = float(group.attrs.get("time", frame_idx))
+                if t_val < ramp_start:
+                    continue
+                if t_val >= stable_end:
+                    break
+                i_val, v_val, _ = self._frame_iv_from_group(group, frame_idx)
+                local_times.append(t_val - ramp_start)
+                voltages.append(v_val)
+                max_time = max(max_time, t_val)
+                with self.lock:
+                    self._frame_iv_cache[frame_idx] = (i_val, v_val, t_val)
+
+            local_times_arr = np.array(local_times, dtype=np.float64)
+            voltages_arr = np.array(voltages, dtype=np.float64)
+            with self.lock:
+                self._vt_step_cache[step_idx] = (max_time, local_times_arr, voltages_arr)
+            return local_times_arr, voltages_arr, step_idx, len(timing_steps)
 
     def _edge_current(self, d):
         """Fallback: integrate edge current density across x=0 cross-section."""
@@ -101,6 +218,7 @@ class IVCache:
                     self.V.extend(x[1] for x in batch)
                     self.t.extend(x[2] for x in batch)
                     self.last_total = available
+                    self._version += 1
                 start = batch_end
         if self._debug:
             self._debug.log("iv_update_done", new=end - start, total=len(self.I))
@@ -127,11 +245,11 @@ class IVCache:
             return np.array(self.I[:n]), np.array(self.V[:n]), np.array(self.t[:n])
 
     def ranges(self, upto=None):
-        I, V, _ = self.arrays(upto=upto)
-        if len(I) == 0:
+        i_arr, v_arr, _ = self.arrays(upto=upto)
+        if len(i_arr) == 0:
             return 0.0, 1.0, 0.0, 1.0
-        valid_I = I[~np.isnan(I)]
-        valid_V = V[~np.isnan(V)]
+        valid_I = i_arr[~np.isnan(i_arr)]
+        valid_V = v_arr[~np.isnan(v_arr)]
         if len(valid_I):
             I_min, I_max = float(valid_I.min()), float(valid_I.max())
         else:
@@ -152,6 +270,116 @@ class IVCache:
         with self.lock:
             return len(self.I)
 
+    def version(self):
+        with self.lock:
+            return self._version
+
+    def step_average_progress(self):
+        with self.lock:
+            if self._step_avg_cache is None:
+                return 0, len(self._timing_steps or [])
+            return self._step_avg_cache[2], self._step_avg_cache[3]
+
+    def start_step_average_prefetch(self):
+        if not self._timing_steps:
+            return
+        if self._step_avg_thread and self._step_avg_thread.is_alive():
+            return
+        self._step_avg_thread = threading.Thread(
+            target=self._step_average_worker,
+            daemon=True,
+        )
+        self._step_avg_thread.start()
+
+    def _step_average_worker(self):
+        try:
+            steps = list(self._timing_steps or [])
+            if not steps:
+                return
+            avg_i = []
+            avg_v = []
+            with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+                data = f["data"]
+                keys = sorted(data.keys(), key=lambda key: int(key))
+                times = [float(data[key].attrs.get("time", int(key))) for key in keys]
+
+                for si, step in enumerate(steps):
+                    ramp_start = step["ramp_start"]
+                    ramp_end = step["ramp_end"]
+                    stable_end = step["stable_end"]
+                    avg_start = stable_end - self._average_time if self._average_time is not None else ramp_end
+                    step_indices = [
+                        i for i, t in enumerate(times)
+                        if ramp_start <= t < stable_end
+                    ]
+                    if not step_indices:
+                        self._publish_step_average(avg_i, avg_v, len(steps))
+                        continue
+
+                    # Compute V for all frames in step (shared by vt_step cache and I-V average)
+                    frame_vt = []
+                    for i in step_indices:
+                        t_val = times[i]
+                        d = data[keys[i]]
+                        try:
+                            mu_rs = np.array(d["running_state/mu"])
+                            dt_rs = np.array(d["running_state/dt"])
+                            voltage_samples = mu_rs[0] - mu_rs[1]
+                            dt_sum = float(dt_rs.sum())
+                            if dt_sum > 0:
+                                v_val = float(np.sum(voltage_samples * dt_rs) / dt_sum)
+                            else:
+                                v_val = float(voltage_samples.mean())
+                        except Exception:
+                            v_val = float("nan")
+                        if self._tc_fn is not None:
+                            try:
+                                tc = self._tc_fn(t_val)
+                                i_val = float(tc["source"]) if isinstance(tc, dict) else float(tc)
+                            except Exception:
+                                i_val = step["je_end"]
+                        else:
+                            i_val = step["je_end"]
+                        frame_vt.append((int(keys[i]), t_val, i_val, v_val))
+
+                    # Populate vt_step cache so playback never hits a cache miss
+                    vt_times = [fv[1] - ramp_start for fv in frame_vt]
+                    vt_volts = [fv[3] for fv in frame_vt]
+                    with self.lock:
+                        self._vt_step_cache[si + 1] = (
+                            frame_vt[-1][1],
+                            np.array(vt_times, dtype=np.float64),
+                            np.array(vt_volts, dtype=np.float64),
+                        )
+                        for frame_idx, t_val, i_val, v_val in frame_vt:
+                            self._frame_iv_cache[frame_idx] = (i_val, v_val, t_val)
+
+                    # I-V averaging over [avg_start, stable_end]
+                    if times[step_indices[-1]] < avg_start:
+                        self._publish_step_average(avg_i, avg_v, len(steps))
+                        continue
+                    values = [
+                        (fv[2], fv[3])
+                        for fv in frame_vt
+                        if fv[1] >= avg_start and not np.isnan(fv[3])
+                    ]
+                    if values:
+                        avg_i.append(float(np.mean([x[0] for x in values])))
+                        avg_v.append(float(np.mean([x[1] for x in values])))
+                    self._publish_step_average(avg_i, avg_v, len(steps))
+        except Exception as exc:
+            self._step_avg_error = exc
+
+    def _publish_step_average(self, avg_i, avg_v, total_steps):
+        with self.lock:
+            self._step_avg_cache = (
+                np.array(avg_i, dtype=np.float64),
+                np.array(avg_v, dtype=np.float64),
+                len(avg_i),
+                total_steps,
+            )
+            self._version += 1
+
     def set_timing_steps(self, steps, average_time=None):
         """Set timing step boundaries and averaging window for Je-step-averaged I-V.
 
@@ -164,6 +392,7 @@ class IVCache:
         """
         self._timing_steps = steps
         self._average_time = average_time
+        self._step_avg_cache = None
 
     def step_averaged_iv(self, current_frame_idx=None):
         """Return I-V data averaged per completed Je step.
@@ -182,10 +411,15 @@ class IVCache:
         """
         if self._timing_steps is None:
             upto = current_frame_idx
-            I, V, _ = self.arrays(upto=upto)
+            i_arr, v_arr, _ = self.arrays(upto=upto)
             if self._debug:
-                self._debug.log("step_avg_fallback", n=len(I))
-            return I, V, len(I), 0
+                self._debug.log("step_avg_fallback", n=len(i_arr))
+            return i_arr, v_arr, len(i_arr), 0
+
+        with self.lock:
+            if self._step_avg_cache is not None:
+                avg_i, avg_v, n_completed, n_total = self._step_avg_cache
+                return avg_i.copy(), avg_v.copy(), n_completed, n_total
 
         with self.lock:
             t_all = list(self.t)
@@ -227,7 +461,11 @@ class IVCache:
 
             step_V = [V_all[i] for i in use_idx]
             step_I = [I_all[i] for i in use_idx]
-            valid = [(i, v) for i, v in zip(step_I, step_V) if not np.isnan(v)]
+            valid = [
+                (i, v)
+                for i, v in zip(step_I, step_V, strict=True)
+                if not np.isnan(v)
+            ]
 
             if valid:
                 avg_I.append(float(np.mean([x[0] for x in valid])))

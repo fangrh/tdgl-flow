@@ -36,12 +36,17 @@ class RealtimeTDGLWidgetPlayer:
         self.live = False
         self.stop_event = threading.Event()
         self.thread = None
+        self._iv_refresh_thread = None
+        self._iv_refresh_target = None
+        self._status_thread = None
         self.render_lock = threading.RLock()
 
         self.frame_times = self._load_frame_times_lazy()
 
         self._speed = 1
         self.buffer = RealtimeFrameBuffer()
+        self._buffer_iv_size = 0
+        self._buffer_iv_version = iv_cache.version()
         self.image = widgets.Image(
             value=self.buffer.get(0, self._render),
             format="png",
@@ -76,12 +81,14 @@ class RealtimeTDGLWidgetPlayer:
         self.speed_input = widgets.IntText(
             value=1,
             description="Speed",
-            layout=widgets.Layout(min_width="80px", max_width="120px"),
+            style={"description_width": "52px"},
+            layout=widgets.Layout(width="clamp(120px, 16vw, 180px)"),
         )
         self.iv_speed = widgets.IntText(
             value=iv_cache.batch_size,
             description="I-V batch",
-            layout=widgets.Layout(min_width="90px", max_width="140px"),
+            style={"description_width": "76px"},
+            layout=widgets.Layout(width="clamp(150px, 20vw, 220px)"),
         )
         self.status = widgets.Label(value="buffer [0]")
 
@@ -108,6 +115,13 @@ class RealtimeTDGLWidgetPlayer:
     def _ensure_frame_time(self, idx):
         if idx < len(self.frame_times):
             return
+        # Try IV cache first to avoid HDF5 network round-trip
+        with self.iv_cache.lock:
+            if idx < len(self.iv_cache.t):
+                while len(self.frame_times) <= idx:
+                    i = len(self.frame_times)
+                    self.frame_times.append(self.iv_cache.t[i])
+                return
         with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             for i in range(len(self.frame_times), min(idx + 1, self.total)):
                 t = float(f[f"data/{i}"].attrs.get("time", i))
@@ -133,6 +147,42 @@ class RealtimeTDGLWidgetPlayer:
         display(self.ui)
         if self.live and self.total > 0:
             self.play()
+
+    def start_status_updates(self):
+        if self._status_thread and self._status_thread.is_alive():
+            return
+        self._status_thread = threading.Thread(
+            target=self._status_loop,
+            daemon=True,
+        )
+        self._status_thread.start()
+
+    def _status_loop(self):
+        last_version = self.iv_cache.version()
+        while not self.iv_cache.stop_event.is_set():
+            version = self.iv_cache.version()
+            if version != last_version:
+                last_version = version
+                self.buffer.clear()
+                self._buffer_iv_version = version
+                if not self.playing:
+                    self._rerender_if_current(self.current)
+                else:
+                    self.status.value = self._status_text(self.current)
+            else:
+                self.status.value = self._status_text(self.current)
+            time.sleep(1.0 if self.playing else 0.5)
+
+    def _status_text(self, frame_idx):
+        tag = "LIVE " if self.live else ""
+        cached = self.iv_cache.size()
+        step_done, step_total = self.iv_cache.step_average_progress()
+        if step_total:
+            return (
+                f"{tag}frame {frame_idx}/{self.total - 1}; "
+                f"I-V {cached}/{self.total}; steps {step_done}/{step_total}"
+            )
+        return f"{tag}frame {frame_idx}/{self.total - 1}; I-V {cached}/{self.total}"
 
     def _available_frames(self) -> int:
         try:
@@ -171,6 +221,10 @@ class RealtimeTDGLWidgetPlayer:
                             total_frames=self.total, playing=self.playing)
         with self.render_lock:
             self.current = frame_idx
+            version = self.iv_cache.version()
+            if version != self._buffer_iv_version:
+                self.buffer.clear()
+                self._buffer_iv_version = version
             png = self.buffer.get(frame_idx, self._render)
             self.image.value = png
             try:
@@ -181,15 +235,50 @@ class RealtimeTDGLWidgetPlayer:
             self.slider.observe(self._on_slider, names="value")
             self.time_label.value = self._fmt_frame(frame_idx)
             self.buffer.keep_near(frame_idx)
-            tag = "LIVE " if self.live else ""
-            self.status.value = (
-                f"{tag}frame {frame_idx}/{self.total - 1}; "
-                f"I-V {self.iv_cache.size()}"
-            )
+            self.status.value = self._status_text(frame_idx)
+            if not self.playing and self.iv_cache.size() <= frame_idx:
+                self._schedule_iv_refresh(frame_idx)
 
     def _on_slider(self, change):
         if int(change["new"]) != self.current:
             self.show(change["new"])
+
+    def _schedule_iv_refresh(self, frame_idx: int) -> None:
+        self._iv_refresh_target = int(frame_idx)
+        if self._iv_refresh_thread and self._iv_refresh_thread.is_alive():
+            return
+        self._iv_refresh_thread = threading.Thread(
+            target=self._iv_refresh_loop,
+            daemon=True,
+        )
+        self._iv_refresh_thread.start()
+
+    def _iv_refresh_loop(self) -> None:
+        last_size = self.iv_cache.size()
+        for _ in range(120):
+            target = self._iv_refresh_target
+            if target is None or self.current != target:
+                return
+            if self.playing:
+                return
+            if self.iv_cache.size() > target:
+                self._rerender_if_current(target)
+                return
+            time.sleep(0.5)
+            size = self.iv_cache.size()
+            if size != last_size:
+                last_size = size
+                self._rerender_if_current(target)
+
+    def _rerender_if_current(self, frame_idx: int) -> None:
+        with self.render_lock:
+            if self.playing or self.current != frame_idx:
+                return
+            self.buffer.clear()
+            self._buffer_iv_size = self.iv_cache.size()
+            self._buffer_iv_version = self.iv_cache.version()
+            self.image.value = self.buffer.get(frame_idx, self._render)
+            self.status.value = self._status_text(frame_idx)
 
     def _on_speed(self, change):
         new_speed = max(1, int(change.get("new", 1)))
@@ -251,7 +340,19 @@ class RealtimeTDGLWidgetPlayer:
             t0 = time.perf_counter()
             self.show(next_frame, wait=False)
             elapsed = time.perf_counter() - t0
-            self.stop_event.wait(max(0.0, 1.0 / max(1, self.fps.value) - elapsed))
+            remaining = max(0.0, 1.0 / max(1, self.fps.value) - elapsed)
+
+            # Pre-render next frame during wait time to hide I/O latency
+            if remaining > 0.02:
+                prefetch_idx = next_frame + self._speed
+                if 0 <= prefetch_idx < self.total:
+                    with self.buffer.lock:
+                        if prefetch_idx not in self.buffer.frames:
+                            remaining = 0.0  # skip sleep, do prefetch now
+                    if remaining == 0.0:
+                        self.buffer.get(prefetch_idx, self._render)
+
+            self.stop_event.wait(remaining)
 
     # ── Agent diagnostic API ────────────────────────────────────────────
 
@@ -563,15 +664,23 @@ def create_player(
         debug_log = DebugLog()
     mesh = load_mesh(h5_path, **s3_kwds)
     mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"], **s3_kwds)
-    iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, debug_log=debug_log, **s3_kwds)
+    iv_cache = IVCache(
+        h5_path, mesh,
+        poll_interval=0.5 if live else 1.0,
+        batch_size=256 if live else 2048,
+        debug_log=debug_log,
+        **s3_kwds,
+    )
     if timing_steps is not None:
         iv_cache.set_timing_steps(timing_steps, average_time=average_time)
-    if not live:
-        iv_cache.batch_size = 512
     iv_cache.ensure(0)
-    iv_cache.start()
+    if not live:
+        iv_cache.start_step_average_prefetch()
+    else:
+        iv_cache.start()
     player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, debug_log=debug_log, **s3_kwds)
     player.live = live
+    player.start_status_updates()
     return player
 
 

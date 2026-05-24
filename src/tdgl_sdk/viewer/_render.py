@@ -71,23 +71,42 @@ class RealtimeFrameBuffer:
             return list(self.frames.keys())
 
 
-def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, debug_log=None, **s3_kwds):
-    idx = int(idx)
-    points = mesh["points"]
-    grid_pts = mesh["grid_pts"]
-    total = mesh["total_frames"]
+def _read_fields(h5_path, idx, **s3_kwds):
+    """Read psi and mu arrays from HDF5 in a single file open."""
+    with h5open(h5_path, "r", **s3_kwds) as f:
+        psi_raw = np.abs(np.array(f[f"data/{idx}/psi"]))
+        mu_raw = np.array(f[f"data/{idx}/mu"])
+    return psi_raw, mu_raw
 
-    canvas = Image.new("RGBA", (FRAME_W, FRAME_H), (30, 30, 30, 255))
-    draw = ImageDraw.Draw(canvas)
 
-    psi_arr = field_rgba(h5_path, points, grid_pts, idx, "psi", mu_vmax, **s3_kwds)
-    mu_arr = field_rgba(h5_path, points, grid_pts, idx, "mu", mu_vmax, **s3_kwds)
+def _field_images(points, grid_pts, psi_raw, mu_raw, mu_vmax):
+    """Interpolate and colormap both field arrays into PIL images."""
+    psi_Z = interpolate(points, grid_pts, psi_raw)
+    mu_Z = interpolate(points, grid_pts, mu_raw)
+    psi_norm = np.clip(np.clip(psi_Z, 0, None) / PSI_VMAX, 0, 1)
+    psi_arr = (cmap_psi(psi_norm) * 255).astype(np.uint8)
+    mu_norm = np.clip((mu_Z + mu_vmax) / (2 * mu_vmax), 0, 1)
+    mu_arr = (cmap_mu(mu_norm) * 255).astype(np.uint8)
     psi_img = Image.fromarray(psi_arr, mode="RGBA").resize(
         (PANEL_W, PANEL_H), Image.Resampling.NEAREST
     )
     mu_img = Image.fromarray(mu_arr, mode="RGBA").resize(
         (PANEL_W, PANEL_H), Image.Resampling.NEAREST
     )
+    return psi_img, mu_img
+
+
+def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, debug_log=None, **s3_kwds):
+    idx = int(idx)
+    points = mesh["points"]
+    grid_pts = mesh["grid_pts"]
+    total = mesh["total_frames"]
+
+    psi_raw, mu_raw = _read_fields(h5_path, idx, **s3_kwds)
+    psi_img, mu_img = _field_images(points, grid_pts, psi_raw, mu_raw, mu_vmax)
+
+    canvas = Image.new("RGBA", (FRAME_W, FRAME_H), (30, 30, 30, 255))
+    draw = ImageDraw.Draw(canvas)
     canvas.paste(psi_img, (14, 42))
     canvas.paste(mu_img, (386, 42))
 
@@ -108,17 +127,11 @@ def render_frame_2x2(h5_path, mesh, iv_cache, mu_vmax, idx, debug_log=None, **s3
     grid_pts = mesh["grid_pts"]
     total = mesh["total_frames"]
 
+    psi_raw, mu_raw = _read_fields(h5_path, idx, **s3_kwds)
+    psi_img, mu_img = _field_images(points, grid_pts, psi_raw, mu_raw, mu_vmax)
+
     canvas = Image.new("RGBA", (FRAME_W, FRAME_H), (30, 30, 30, 255))
     draw = ImageDraw.Draw(canvas)
-
-    psi_arr = field_rgba(h5_path, points, grid_pts, idx, "psi", mu_vmax, **s3_kwds)
-    mu_arr = field_rgba(h5_path, points, grid_pts, idx, "mu", mu_vmax, **s3_kwds)
-    psi_img = Image.fromarray(psi_arr, mode="RGBA").resize(
-        (PANEL_W, PANEL_H), Image.Resampling.NEAREST
-    )
-    mu_img = Image.fromarray(mu_arr, mode="RGBA").resize(
-        (PANEL_W, PANEL_H), Image.Resampling.NEAREST
-    )
     canvas.paste(psi_img, (14, 42))
     canvas.paste(mu_img, (386, 42))
 
@@ -139,7 +152,6 @@ def render_frame_2x2(h5_path, mesh, iv_cache, mu_vmax, idx, debug_log=None, **s3
 
 
 def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
-    iv_cache.ensure(idx)
     # Step-averaged curve uses ALL available data (not limited by playback)
     avg_I, avg_V, n_completed, n_total = iv_cache.step_averaged_iv(
         current_frame_idx=iv_cache.size() - 1,
@@ -151,11 +163,25 @@ def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
         )
 
     # Current frame raw data for the position dot
-    cur_I_raw, cur_V_raw, _ = iv_cache.arrays(upto=idx)
+    cur_I, cur_V, cur_t = iv_cache.frame_iv(idx)
+    cached_I_raw, cached_V_raw, _ = iv_cache.arrays(upto=idx)
 
     # Compute ranges from step-averaged data + current dot
-    all_I = np.concatenate([avg_I, cur_I_raw[~np.isnan(cur_V_raw)]]) if len(avg_I) and len(cur_I_raw) else (avg_I if len(avg_I) else cur_I_raw)
-    all_V = np.concatenate([avg_V, cur_V_raw[~np.isnan(cur_V_raw)]]) if len(avg_V) and len(cur_V_raw) else (avg_V if len(avg_V) else cur_V_raw)
+    valid_avg = ~np.isnan(avg_V) if len(avg_V) else np.array([], dtype=bool)
+    valid_raw = ~np.isnan(cached_V_raw) if len(cached_V_raw) else np.array([], dtype=bool)
+    all_I_parts = []
+    all_V_parts = []
+    if len(avg_I):
+        all_I_parts.append(avg_I[valid_avg])
+        all_V_parts.append(avg_V[valid_avg])
+    if len(cached_I_raw):
+        all_I_parts.append(cached_I_raw[valid_raw])
+        all_V_parts.append(cached_V_raw[valid_raw])
+    if not np.isnan(cur_V):
+        all_I_parts.append(np.array([cur_I], dtype=np.float64))
+        all_V_parts.append(np.array([cur_V], dtype=np.float64))
+    all_I = np.concatenate(all_I_parts) if all_I_parts else np.array([])
+    all_V = np.concatenate(all_V_parts) if all_V_parts else np.array([])
     if len(all_I) == 0:
         all_I = np.array([0.0, 1.0])
         all_V = np.array([0.0, 1.0])
@@ -203,9 +229,9 @@ def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
             draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill=(233, 69, 96))
 
     # Current playback position dot (white on black)
-    if len(cur_I_raw) and not np.isnan(cur_V_raw[-1]):
-        x = left + (float(cur_I_raw[-1]) - I_min) / I_den * (right - left)
-        y = top + (1 - (float(cur_V_raw[-1]) - V_min) / V_den) * (bottom - top)
+    if not np.isnan(cur_V):
+        x = left + (float(cur_I) - I_min) / I_den * (right - left)
+        y = top + (1 - (float(cur_V) - V_min) / V_den) * (bottom - top)
         draw.ellipse([x - 6, y - 6, x + 6, y + 6], fill=(0, 0, 0))
         draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 255, 255))
 
@@ -217,8 +243,7 @@ def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
     draw.text((8, y0 + 70), "V", fill=(150, 150, 150))
     # Status line: completed steps / total steps
     step_info = f"Je steps: {n_completed}/{n_total}" if n_total > 0 else f"IV cached={iv_cache.size()}"
-    cur_t_raw = iv_cache.t[:idx + 1] if idx + 1 <= len(iv_cache.t) else iv_cache.t
-    t_label = f"t={cur_t_raw[-1]:.3g}" if len(cur_t_raw) else "t=?"
+    t_label = f"t={cur_t:.3g}"
     draw.text(
         (right - 250, top + 4),
         f"{t_label}, {step_info}",
@@ -228,32 +253,10 @@ def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
 
 def _draw_vt(draw, iv_cache, idx, box, debug_log=None):
     """Draw voltage vs time for the current Je step, time starting at 0."""
-    iv_cache.ensure(idx)
-    _, V_all, t_all = iv_cache.arrays(upto=idx)
-    if len(t_all) == 0:
-        t_all = np.array([0.0, 1.0])
-        V_all = np.array([0.0, 1.0])
-
-    # Find the current Je step from timing_steps
-    cur_t = t_all[-1] if len(t_all) else 0.0
-    timing_steps = getattr(iv_cache, "_timing_steps", None)
-    current_step = None
-    step_idx = 0
-    if timing_steps:
-        for si, step in enumerate(timing_steps):
-            if step["ramp_start"] <= cur_t < step["stable_end"]:
-                current_step = step
-                step_idx = si + 1
-                break
-
-    # Filter to current step, offset time to 0
-    if current_step is not None:
-        mask = (t_all >= current_step["ramp_start"]) & (t_all < current_step["stable_end"])
-        t_step = t_all[mask] - current_step["ramp_start"]
-        V_step = V_all[mask]
-    else:
-        t_step = t_all
-        V_step = V_all
+    t_step, V_step, step_idx, n_steps = iv_cache.vt_step(idx)
+    if len(t_step) == 0:
+        t_step = np.array([0.0, 1.0])
+        V_step = np.array([0.0, 1.0])
 
     valid = ~np.isnan(V_step)
     t_valid = t_step[valid]
@@ -294,13 +297,6 @@ def _draw_vt(draw, iv_cache, idx, box, debug_log=None):
     if len(pts) > 1:
         draw.line(pts, fill=(100, 149, 237), width=2)
 
-    # Current playback position dot (white on black)
-    if len(t_valid) and not np.isnan(V_valid[-1]):
-        x = left + (float(t_valid[-1]) - t_min) / t_den * (right - left)
-        y = top + (1 - (float(V_valid[-1]) - V_min) / V_den) * (bottom - top)
-        draw.ellipse([x - 6, y - 6, x + 6, y + 6], fill=(0, 0, 0))
-        draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 255, 255))
-
     # Axis labels
     draw.text(
         ((left + right) // 2 - 18, y1 - 18),
@@ -310,9 +306,9 @@ def _draw_vt(draw, iv_cache, idx, box, debug_log=None):
     draw.text((8, y0 + 70), "V", fill=(150, 150, 150))
 
     # Step info
-    if timing_steps and current_step:
+    if n_steps and step_idx:
         draw.text(
             (right - 140, top + 4),
-            f"Je step {step_idx}/{len(timing_steps)}",
+            f"Je step {step_idx}/{n_steps}",
             fill=(150, 150, 150),
         )
