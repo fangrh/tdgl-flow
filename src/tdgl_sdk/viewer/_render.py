@@ -67,7 +67,7 @@ class RealtimeFrameBuffer:
             return list(self.frames.keys())
 
 
-def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, **s3_kwds):
+def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, debug_log=None, **s3_kwds):
     idx = int(idx)
     points = mesh["points"]
     grid_pts = mesh["grid_pts"]
@@ -90,19 +90,24 @@ def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, **s3_kwds):
     draw.text((14, 16), f"TDGL frame {idx} / {total - 1}", fill=(235, 235, 235))
     draw.text((156, 226), "|psi| inferno", fill=(120, 120, 120))
     draw.text((528, 226), "mu RdBu", fill=(120, 120, 120))
-    _draw_iv(draw, iv_cache, idx, (14, 252, 746, 454))
+    _draw_iv(draw, iv_cache, idx, (14, 252, 746, 454), debug_log=debug_log)
 
     buf = io.BytesIO()
     canvas.convert("RGB").save(buf, format="PNG", optimize=False)
     return buf.getvalue()
 
 
-def _draw_iv(draw, iv_cache, idx, box):
+def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
     iv_cache.ensure(idx)
     # Step-averaged curve uses ALL available data (not limited by playback)
     avg_I, avg_V, n_completed, n_total = iv_cache.step_averaged_iv(
         current_frame_idx=iv_cache.size() - 1,
     )
+    if debug_log:
+        debug_log.log(
+            "draw_iv", frame=idx, cache_size=iv_cache.size(),
+            n_avg=len(avg_I), n_completed=n_completed, n_total=n_total,
+        )
 
     # Current frame raw data for the position dot
     cur_I_raw, cur_V_raw, _ = iv_cache.arrays(upto=idx)
