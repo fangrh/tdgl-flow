@@ -374,6 +374,12 @@ class IVCache:
                         avg_i.append(float(np.mean([x[0] for x in values])))
                         avg_v.append(float(np.mean([x[1] for x in values])))
                     self._publish_step_average(avg_i, avg_v, len(steps))
+            # IMPORTANT: Only bump _version once after all steps are processed.
+            # If incremented per-step, each _publish_step_average triggers
+            # buffer.clear() in _status_loop and show(), destroying prefetched
+            # frames and causing playback stutter (especially with ramp_down
+            # where step count doubles to ~200). Status progress still updates
+            # per-step via step_average_progress() which reads _step_avg_cache.
             with self.lock:
                 self._version += 1
         except Exception as exc:
