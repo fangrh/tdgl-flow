@@ -1,5 +1,3 @@
-import bisect
-import math
 import threading
 import time
 
@@ -21,19 +19,6 @@ except ImportError:
 FPS_DEFAULT = 10
 
 
-def compute_time_grid(solve_time: float, playback_dt: float = 1.0):
-    """Pre-compute the expected time positions for the full simulation.
-
-    Returns a list of simulation times: [0, dt, 2*dt, ..., solve_time].
-    The slider and playback advance through these positions.
-    Actual frame data is matched from HDF5 as it arrives.
-    """
-    if solve_time <= 0 or playback_dt <= 0:
-        return [0.0]
-    n = math.ceil(solve_time / playback_dt)
-    return [round(i * playback_dt, 6) for i in range(n + 1)]
-
-
 class RealtimeTDGLWidgetPlayer:
     def __init__(self, h5_path, mesh, iv_cache, mu_vmax, debug_log=None, **s3_kwds):
         if widgets is None:
@@ -45,24 +30,17 @@ class RealtimeTDGLWidgetPlayer:
         self.mu_vmax = mu_vmax
         self._s3_kwds = s3_kwds
         self._debug = debug_log
-        self.total = mesh["total_frames"]  # actual frames in HDF5
-        self.current = 0  # current position in time_grid
+        self.total = mesh["total_frames"]
+        self.current = 0
         self.playing = False
         self.live = False
         self.stop_event = threading.Event()
         self.thread = None
         self.render_lock = threading.RLock()
-        self.playback_dt = 1.0
 
-        # Actual frame times loaded from HDF5 (grows in live mode)
         self.frame_times = self._load_frame_times()
 
-        # Pre-computed time grid — the playback timeline.
-        # Set by StreamingTDGLPlayer from solve_time before display.
-        # Defaults to actual frame times if no timing info provided.
-        self.time_grid = list(self.frame_times) if self.frame_times else [0.0]
-        self.solve_time = self.frame_times[-1] if self.frame_times else 0
-
+        self._speed = 1
         self.buffer = RealtimeFrameBuffer()
         self.image = widgets.Image(
             value=self.buffer.get(0, self._render),
@@ -72,21 +50,23 @@ class RealtimeTDGLWidgetPlayer:
         self.play_button = widgets.Button(
             description="Play", icon="play", layout=widgets.Layout(width="92px")
         )
-        self.stop_button = widgets.Button(
-            description="Stop", icon="stop", layout=widgets.Layout(width="92px")
+        self.speed_input = widgets.IntText(
+            value=1,
+            description="Speed",
+            layout=widgets.Layout(width="130px"),
         )
         self.slider = widgets.IntSlider(
             value=0,
             min=0,
-            max=max(0, len(self.time_grid) - 1),
+            max=max(0, self.total - 1),
             step=1,
-            description="Step",
+            description="Frame",
             continuous_update=False,
             readout=False,
             layout=widgets.Layout(width="400px"),
         )
         self.time_label = widgets.Label(
-            value=self._fmt_step(0),
+            value=self._fmt_frame(0),
             layout=widgets.Layout(width="200px"),
         )
         self.fps = widgets.IntSlider(
@@ -101,17 +81,16 @@ class RealtimeTDGLWidgetPlayer:
         self.status = widgets.Label(value="buffer [0]")
 
         self.play_button.on_click(self.toggle)
-        self.stop_button.on_click(self.stop)
+        self.speed_input.observe(self._on_speed, names="value")
         self.slider.observe(self._on_slider, names="value")
 
         self.ui = widgets.VBox([
-            widgets.HBox([self.play_button, self.stop_button, self.slider, self.time_label]),
+            widgets.HBox([self.play_button, self.speed_input, self.slider, self.time_label]),
             widgets.HBox([self.fps, self.status]),
             self.image,
         ])
 
     def _load_frame_times(self):
-        """Load physical time for each frame from HDF5 attrs."""
         times = []
         with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             for i in range(self.total):
@@ -119,50 +98,14 @@ class RealtimeTDGLWidgetPlayer:
                 times.append(t)
         return times
 
-    def set_time_grid(self, solve_time, playback_dt=None):
-        """Set the pre-computed timeline from solve_time.
-
-        Called by StreamingTDGLPlayer after reading the manifest.
-        Expands slider range to cover the full expected timeline.
-        """
-        if playback_dt is not None:
-            self.playback_dt = playback_dt
-        self.solve_time = solve_time
-        self.time_grid = compute_time_grid(solve_time, self.playback_dt)
-        self.slider.max = max(0, len(self.time_grid) - 1)
-        self.time_label.value = self._fmt_step(self.current)
-
-    def _fmt_step(self, step):
-        """Format current step: 't=X.XXX / Y.YYY s (frame N)'."""
-        if step >= len(self.time_grid):
-            step = len(self.time_grid) - 1
-        t = self.time_grid[step]
-        t_end = self.time_grid[-1]
-        frame_idx = self._find_frame_for_time(t)
-        frame_info = f" frame {frame_idx}" if frame_idx >= 0 else " (waiting)"
-        return f"t={t:.3f} / {t_end:.3f} s{frame_info}"
+    def _fmt_frame(self, idx):
+        idx = max(0, min(idx, self.total - 1))
+        t = self.frame_times[idx] if idx < len(self.frame_times) else 0.0
+        return f"frame {idx} / {self.total - 1}  t={t:.3f}s"
 
     @property
     def debug_log(self):
         return self._debug
-
-    def _find_frame_for_time(self, target_time):
-        """Find the best available frame for a target simulation time.
-
-        Returns frame index whose time is closest to target_time,
-        or -1 if no frames exist.
-        """
-        if not self.frame_times:
-            return -1
-        idx = bisect.bisect_left(self.frame_times, target_time)
-        if idx >= len(self.frame_times):
-            return len(self.frame_times) - 1
-        if idx == 0:
-            return 0
-        # Pick closer of idx-1 and idx
-        d_left = abs(self.frame_times[idx - 1] - target_time)
-        d_right = abs(self.frame_times[idx] - target_time)
-        return idx - 1 if d_left <= d_right else idx
 
     def _render(self, idx):
         return render_frame_png(
@@ -185,7 +128,6 @@ class RealtimeTDGLWidgetPlayer:
         return 0
 
     def _refresh_total(self):
-        """Update self.total and frame_times from the live HDF5."""
         available = self._available_frames()
         if available > self.total:
             with h5open(self.h5_path, "r", **self._s3_kwds) as f:
@@ -193,52 +135,39 @@ class RealtimeTDGLWidgetPlayer:
                     t = float(f[f"data/{i}"].attrs.get("time", i))
                     self.frame_times.append(t)
             self.total = available
+            self.slider.max = max(0, self.total - 1)
 
-    def show(self, step, wait=True):
-        """Display the frame for a time-grid step position.
+    def show(self, frame_idx, wait=True):
+        frame_idx = max(0, min(frame_idx, self.total - 1))
 
-        Finds the closest available frame for this step's target time.
-        In live mode, waits for data if no frame exists yet.
-        """
-        step = max(0, min(step, len(self.time_grid) - 1))
-        target_time = self.time_grid[step]
-
-        self._refresh_total()
-        frame_idx = self._find_frame_for_time(target_time)
-
-        if frame_idx < 0:
-            if self.live and wait:
-                for _ in range(120):
-                    self._refresh_total()
-                    frame_idx = self._find_frame_for_time(target_time)
-                    if frame_idx >= 0:
-                        break
-                    self.stop_event.wait(0.5)
-                    if self.stop_event.is_set():
-                        return
-            if frame_idx < 0:
-                frame_idx = max(0, self.total - 1)
+        if self.live and frame_idx >= self.total and wait:
+            for _ in range(120):
+                self._refresh_total()
+                if frame_idx < self.total:
+                    break
+                self.stop_event.wait(0.5)
+                if self.stop_event.is_set():
+                    return
 
         frame_idx = min(frame_idx, self.total - 1)
         if self._debug:
-            self._debug.log("show", step=step, frame=frame_idx,
-                           total_frames=self.total, playing=self.playing)
+            self._debug.log("show", frame=frame_idx,
+                            total_frames=self.total, playing=self.playing)
         with self.render_lock:
-            self.current = step
+            self.current = frame_idx
             png = self.buffer.get(frame_idx, self._render)
             self.image.value = png
             try:
                 self.slider.unobserve(self._on_slider, names="value")
             except Exception:
                 pass
-            self.slider.value = step
+            self.slider.value = frame_idx
             self.slider.observe(self._on_slider, names="value")
-            self.time_label.value = self._fmt_step(step)
+            self.time_label.value = self._fmt_frame(frame_idx)
             self.buffer.keep_near(frame_idx)
             tag = "LIVE " if self.live else ""
             self.status.value = (
-                f"{tag}step {step}/{len(self.time_grid)-1} "
-                f"frame {frame_idx}/{self.total-1}; "
+                f"{tag}frame {frame_idx}/{self.total - 1}; "
                 f"I-V {self.iv_cache.size()}"
             )
 
@@ -246,9 +175,15 @@ class RealtimeTDGLWidgetPlayer:
         if int(change["new"]) != self.current:
             self.show(change["new"])
 
-    def stop(self, _=None):
+    def _on_speed(self, change):
+        new_speed = max(1, int(change.get("new", 1)))
+        was_playing = self.playing
         self.pause()
-        self.show(0)
+        self._speed = new_speed
+        self.buffer.clear()
+        self.show(self.current, wait=False)
+        if was_playing:
+            self.play()
 
     def toggle(self, _=None):
         if self.playing:
@@ -272,44 +207,29 @@ class RealtimeTDGLWidgetPlayer:
         self.play_button.description = "Play"
         self.play_button.icon = "play"
 
-    def stop(self, _=None):
-        self.pause()
-        self.show(0)
-
     def _loop(self):
         while not self.stop_event.is_set():
             if self._debug:
                 self._debug.log("loop_tick", current=self.current,
-                               max_step=len(self.time_grid)-1)
-            next_step = self.current + 1
+                                speed=self._speed, total=self.total)
+            next_frame = self.current + self._speed
 
-            if next_step >= len(self.time_grid):
+            if next_frame >= self.total:
                 if self.live:
-                    t = self.time_grid[self.current] if self.current < len(self.time_grid) else 0
-                    self.status.value = f"LIVE t={t:.3f}s — waiting..."
-                    self.stop_event.wait(2.0)
-                    continue
+                    self._refresh_total()
+                    if next_frame >= self.total:
+                        self.status.value = f"LIVE frame {self.current} — waiting..."
+                        self.stop_event.wait(2.0)
+                        continue
                 else:
-                    self.pause()
-                    return
-
-            target_time = self.time_grid[next_step]
-            self._refresh_total()
-            frame_idx = self._find_frame_for_time(target_time)
-
-            if frame_idx < 0:
-                if self.live:
-                    self.status.value = (
-                        f"LIVE t={target_time:.3f}s — waiting for data..."
-                    )
-                    self.stop_event.wait(2.0)
-                    continue
-                else:
-                    self.pause()
-                    return
+                    next_frame = self.total - 1
+                    if next_frame <= self.current:
+                        self.show(next_frame, wait=False)
+                        self.pause()
+                        return
 
             t0 = time.perf_counter()
-            self.show(next_step, wait=False)
+            self.show(next_frame, wait=False)
             elapsed = time.perf_counter() - t0
             self.stop_event.wait(max(0.0, 1.0 / max(1, self.fps.value) - elapsed))
 
@@ -318,16 +238,14 @@ class RealtimeTDGLWidgetPlayer:
     def get_status(self) -> dict:
         self._refresh_total()
         I, V, t = self.iv_cache.arrays()
-        t_now = self.time_grid[self.current] if self.current < len(self.time_grid) else None
+        cur_t = self.frame_times[self.current] if self.current < len(self.frame_times) else None
         return {
-            "current_step": self.current,
-            "current_time": t_now,
-            "total_steps": len(self.time_grid),
-            "available_frames": self.total,
+            "current_frame": self.current,
+            "current_time": cur_t,
+            "total_frames": self.total,
             "playing": self.playing,
             "live": self.live,
-            "solve_time": self.solve_time,
-            "at_edge": self.current >= len(self.time_grid) - 1,
+            "at_edge": self.current >= self.total - 1,
             "iv_cache": {
                 "cached_points": len(I),
                 "total_frames": self.total,
@@ -337,27 +255,10 @@ class RealtimeTDGLWidgetPlayer:
         }
 
     def diagnose_mapping(self) -> dict:
-        """Diagnostic: show the complete slider→time→frame mapping."""
         self._refresh_total()
-        # Show time_grid summary
-        grid = self.time_grid
-        # Show frame_times summary
-        ft = self.frame_times
-        # Build mapping: for each time_grid position, which frame does it map to
-        mapping = []
-        for step in range(len(grid)):
-            t = grid[step]
-            fi = self._find_frame_for_time(t) if ft else -1
-            ft_val = ft[fi] if 0 <= fi < len(ft) else None
-            mapping.append({"step": step, "target_time": t, "frame_idx": fi, "frame_time": ft_val})
         return {
-            "time_grid_size": len(grid),
-            "time_grid_range": [grid[0], grid[-1]],
             "available_frames": self.total,
-            "frame_times": ft,
-            "solve_time": self.solve_time,
-            "playback_dt": self.playback_dt,
-            "mapping": mapping,
+            "frame_times": self.frame_times,
         }
 
     def get_frame_data(self, idx: int) -> dict:
@@ -414,16 +315,11 @@ class RealtimeTDGLWidgetPlayer:
         if V_min == V_max:
             V_min -= 0.5; V_max += 0.5
 
-        # Current playback position on the I-V curve (uses raw data)
         current_I, current_V = None, None
         I_all_raw, V_all_raw, _ = self.iv_cache.arrays()
-        if self.current < len(self.time_grid) and len(I_all_raw) > 0:
-            frame_idx = self._find_frame_for_time(
-                self.time_grid[self.current]
-            )
-            if 0 <= frame_idx < len(I_all_raw):
-                current_I = float(I_all_raw[frame_idx])
-                current_V = float(V_all_raw[frame_idx])
+        if 0 <= self.current < len(I_all_raw):
+            current_I = float(I_all_raw[self.current])
+            current_V = float(V_all_raw[self.current])
 
         result = {
             "n_points": len(I),
@@ -439,17 +335,13 @@ class RealtimeTDGLWidgetPlayer:
 
 
 class StreamingTDGLPlayer:
-    """Watches a running simulation in MinIO with a pre-allocated timeline.
-
-    Reads timing params upfront to compute a time grid. The slider shows
-    the full timeline from t=0 to t=solve_time. As data arrives from MinIO,
-    frames are matched to the nearest time-grid position and rendered.
+    """Watches a running simulation in MinIO with a frame-index slider.
 
     Reads HDF5 directly from MinIO via ROS3 — no local download needed.
     """
 
     def __init__(self, store, run_id, poll_interval=15, argo_host=None,
-                 timing_params=None, solver_options=None, playback_dt=1.0,
+                 timing_params=None, solver_options=None,
                  average_time=None, debug=False):
         if widgets is None:
             raise ImportError("ipywidgets is required")
@@ -465,7 +357,6 @@ class StreamingTDGLPlayer:
         self._timing_params = timing_params
         self._average_time = average_time
         self._solver_options = solver_options or {}
-        self._playback_dt = playback_dt
         self._debug_flag = debug
         from tdgl_sdk.viewer._debug import DebugLog
         self._debug = DebugLog() if debug else None
@@ -486,7 +377,6 @@ class StreamingTDGLPlayer:
         ])
 
     def _compute_timing_steps(self):
-        """Compute timing step boundaries from timing_params."""
         if not self._timing_params:
             return None
         try:
@@ -525,8 +415,6 @@ class StreamingTDGLPlayer:
                     continue
 
                 status = manifest.get("status", "unknown")
-                timing = manifest.get("timing_params") or {}
-                solve_time = timing.get("solve_time", 0)
 
                 if status in ("running", "completed"):
                     try:
@@ -536,7 +424,7 @@ class StreamingTDGLPlayer:
                         n_frames = 0
 
                     if self._debug:
-                        self._debug.log("poll_frames", status=status, n_frames=n_frames, solve_time=solve_time)
+                        self._debug.log("poll_frames", status=status, n_frames=n_frames)
 
                     if n_frames == 0:
                         self.status_label.value = f"{status} — waiting for HDF5..."
@@ -544,10 +432,9 @@ class StreamingTDGLPlayer:
                         continue
 
                     if self._player is None:
-                        self._create_player(status, solve_time)
-                    elif solve_time > 0 and self._player.solve_time != solve_time:
-                        # Update time grid if manifest now has solve_time
-                        self._player.set_time_grid(solve_time, self._playback_dt)
+                        self._create_player(status)
+                    else:
+                        self._player._refresh_total()
 
                     if status == "completed" and not self._completed:
                         self._completed = True
@@ -588,8 +475,7 @@ class StreamingTDGLPlayer:
         except Exception:
             return "unknown"
 
-    def _create_player(self, status, solve_time):
-        """Create the inner player with pre-allocated time grid."""
+    def _create_player(self, status):
         from IPython.display import clear_output
 
         with self.output:
@@ -599,7 +485,6 @@ class StreamingTDGLPlayer:
 
         self._player = create_player(
             self._h5_url, live=(status == "running"),
-            playback_dt=self._playback_dt,
             timing_steps=timing_steps,
             average_time=self._average_time,
             debug=self._debug_flag,
@@ -607,13 +492,9 @@ class StreamingTDGLPlayer:
             **self._s3_kwds,
         )
 
-        # Pre-allocate the timeline from solve_time
-        if solve_time and solve_time > 0:
-            self._player.set_time_grid(solve_time, self._playback_dt)
-
         with self.output:
             clear_output(wait=True)
-            self._player.display_player()  # auto-plays if live
+            self._player.display_player()
 
     def stop(self):
         self._stop_event.set()
@@ -637,7 +518,6 @@ class StreamingTDGLPlayer:
 def create_player(
     h5_path: str,
     live: bool = False,
-    playback_dt: float = 1.0,
     timing_steps: list | None = None,
     average_time: float | None = None,
     debug: bool = False,
@@ -649,7 +529,6 @@ def create_player(
     Args:
         h5_path: Path to the HDF5 file (local path or http:// URL for MinIO).
         live: If True, auto-plays and waits at the boundary for new frames.
-        playback_dt: Simulation time per animation step (default 1.0).
         timing_steps: Optional list of step dicts from build_timing() for
                       step-averaged I-V curve.
         average_time: Duration at end of each step's stable period to average
@@ -671,27 +550,20 @@ def create_player(
     iv_cache.start()
     player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, debug_log=debug_log, **s3_kwds)
     player.live = live
-    player.playback_dt = playback_dt
     return player
 
 
 def watch_run(
     store, run_id: str, poll_interval: int = 15, argo_host: str | None = None,
     timing_params: dict | None = None, solver_options: dict | None = None,
-    playback_dt: float = 1.0, average_time: float | None = None,
-    debug: bool = False,
+    average_time: float | None = None, debug: bool = False,
 ) -> StreamingTDGLPlayer:
-    """Create a streaming player that watches a running simulation in MinIO.
-
-    Pre-allocates the timeline from timing params so the slider shows
-    the full solve_time range before any data arrives.
-    """
+    """Create a streaming player that watches a running simulation in MinIO."""
     return StreamingTDGLPlayer(
         store, run_id, poll_interval,
         argo_host=argo_host,
         timing_params=timing_params,
         solver_options=solver_options,
-        playback_dt=playback_dt,
         average_time=average_time,
         debug=debug,
     )
@@ -722,7 +594,7 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
 
     status = player.get_status()
     step = {"action": "init", "ok": True, "status": status}
-    if status["available_frames"] == 0:
+    if status["total_frames"] == 0:
         step["ok"] = False
         errors.append("No frames in HDF5")
     steps.append(step)
@@ -746,10 +618,7 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
     seek_indices = _pick_seek_targets(total, rng, n=4)
     for idx in seek_indices:
         try:
-            # For non-live player, seek by frame index via _find_frame_for_time
-            target_time = player.frame_times[idx]
-            step_pos = bisect.bisect_left(player.time_grid, target_time)
-            player.show(step_pos)
+            player.show(idx)
             frame_data = player.get_frame_data(idx)
             status = player.get_status()
             ok = True
@@ -790,16 +659,17 @@ def debug_player(h5_path: str, seed: int = 42, **s3_kwds) -> dict:
 
     # Seek beyond
     try:
-        player.show(len(player.time_grid) + 50, wait=False)
+        player.show(total + 50, wait=False)
         status = player.get_status()
         steps.append({"action": "seek_beyond", "ok": True, "status": status})
     except Exception as exc:
         steps.append({"action": "seek_beyond", "ok": False, "error": str(exc)})
         errors.append(f"seek beyond failed: {exc}")
 
-    # Stop
+    # Pause + reset
     try:
-        player.stop()
+        player.pause()
+        player.show(0)
         status = player.get_status()
         steps.append({"action": "stop", "ok": True, "status": status})
     except Exception as exc:

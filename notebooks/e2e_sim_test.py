@@ -42,7 +42,7 @@ DEVICE_PARAMS = {
 
 TIMING_PARAMS = {
     "je_initial": 0.0,
-    "je_final": 12,
+    "je_final": 20,
     "je_step": 0.2,
     "ramp_time": 100.0,
     "stable_time": 200.0,

@@ -50,6 +50,10 @@ class RealtimeFrameBuffer:
             self._prune()
         return png
 
+    def clear(self):
+        with self.lock:
+            self.frames.clear()
+
     def _prune(self):
         while len(self.frames) > self.keep:
             self.frames.popitem(last=False)
