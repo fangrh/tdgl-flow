@@ -53,15 +53,19 @@ def load_mesh(h5_path, **s3_kwds):
 
 
 def estimate_mu_vmax(h5_path, total, **s3_kwds):
+    if total <= 5:
+        sample = list(range(total))
+    else:
+        sample = [0, total // 4, total // 2, 3 * total // 4, total - 1]
     mu_maxes = []
     with h5open(h5_path, "r", **s3_kwds) as f:
-        for i in range(total):
+        for i in sample:
             try:
                 mu_maxes.append(float(np.abs(np.array(f[f"data/{i}/mu"])).max()))
             except Exception:
                 pass
     if mu_maxes and max(mu_maxes) > 0:
-        return float(np.percentile(mu_maxes, 99))
+        return float(max(mu_maxes))
     return 1.0
 
 

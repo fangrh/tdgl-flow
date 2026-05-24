@@ -38,7 +38,7 @@ class RealtimeTDGLWidgetPlayer:
         self.thread = None
         self.render_lock = threading.RLock()
 
-        self.frame_times = self._load_frame_times()
+        self.frame_times = self._load_frame_times_lazy()
 
         self._speed = 1
         self.buffer = RealtimeFrameBuffer()
@@ -90,16 +90,26 @@ class RealtimeTDGLWidgetPlayer:
             self.image,
         ])
 
-    def _load_frame_times(self):
+    def _load_frame_times_lazy(self):
+        if self.total == 0:
+            return []
         times = []
         with h5open(self.h5_path, "r", **self._s3_kwds) as f:
-            for i in range(self.total):
-                t = float(f[f"data/{i}"].attrs.get("time", i))
-                times.append(t)
+            t = float(f["data/0"].attrs.get("time", 0))
+            times.append(t)
         return times
+
+    def _ensure_frame_time(self, idx):
+        if idx < len(self.frame_times):
+            return
+        with h5open(self.h5_path, "r", **self._s3_kwds) as f:
+            for i in range(len(self.frame_times), min(idx + 1, self.total)):
+                t = float(f[f"data/{i}"].attrs.get("time", i))
+                self.frame_times.append(t)
 
     def _fmt_frame(self, idx):
         idx = max(0, min(idx, self.total - 1))
+        self._ensure_frame_time(idx)
         t = self.frame_times[idx] if idx < len(self.frame_times) else 0.0
         return f"frame {idx} / {self.total - 1}  t={t:.3f}s"
 
