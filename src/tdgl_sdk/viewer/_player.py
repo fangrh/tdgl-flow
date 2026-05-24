@@ -377,19 +377,24 @@ class RealtimeTDGLWidgetPlayer:
 
             return result
 
-    def get_iv_data(self, upto: int | None = None) -> dict:
+    def get_iv_data(self, upto: int | None = None, step_averaged: bool = False) -> dict:
         import numpy as np
 
         self._refresh_total()
         target = self.total - 1 if upto is None else upto
         self.iv_cache.ensure(max(0, target))
-        I_all, V_all, t_all = self.iv_cache.arrays(upto=upto)
 
-        # Filter out NaN V values (frames without valid voltage data)
-        valid = ~np.isnan(V_all)
-        I = I_all[valid]
-        V = V_all[valid]
-        t = t_all[valid]
+        if step_averaged:
+            avg_I, avg_V, n_completed, n_total = self.iv_cache.step_averaged_iv()
+            valid = ~np.isnan(avg_V)
+            I = avg_I[valid]
+            V = avg_V[valid]
+        else:
+            I_all, V_all, t_all = self.iv_cache.arrays(upto=upto)
+            valid = ~np.isnan(V_all)
+            I = I_all[valid]
+            V = V_all[valid]
+            t = t_all[valid]
 
         I_min, I_max = (float(I.min()), float(I.max())) if len(I) > 0 else (0.0, 1.0)
         V_min, V_max = (float(V.min()), float(V.max())) if len(V) > 0 else (0.0, 1.0)
@@ -398,26 +403,28 @@ class RealtimeTDGLWidgetPlayer:
         if V_min == V_max:
             V_min -= 0.5; V_max += 0.5
 
-        # Current playback position on the I-V curve
+        # Current playback position on the I-V curve (uses raw data)
         current_I, current_V = None, None
-        if self.current < len(self.time_grid) and len(I_all) > 0:
+        I_all_raw, V_all_raw, _ = self.iv_cache.arrays()
+        if self.current < len(self.time_grid) and len(I_all_raw) > 0:
             frame_idx = self._find_frame_for_time(
                 self.time_grid[self.current]
             )
-            if 0 <= frame_idx < len(I_all):
-                current_I = float(I_all[frame_idx])
-                current_V = float(V_all[frame_idx])
+            if 0 <= frame_idx < len(I_all_raw):
+                current_I = float(I_all_raw[frame_idx])
+                current_V = float(V_all_raw[frame_idx])
 
-        return {
+        result = {
             "n_points": len(I),
             "I": I.tolist(),
             "V": V.tolist(),
-            "t": t.tolist(),
             "I_range": [I_min, I_max],
             "V_range": [V_min, V_max],
             "current_I": current_I,
             "current_V": current_V,
+            "step_averaged": step_averaged,
         }
+        return result
 
 
 class StreamingTDGLPlayer:
@@ -461,6 +468,17 @@ class StreamingTDGLPlayer:
             widgets.HBox([self.status_label, self.stop_btn]),
             self.output,
         ])
+
+    def _compute_timing_steps(self):
+        """Compute timing step boundaries from timing_params."""
+        if not self._timing_params:
+            return None
+        try:
+            from tdgl_workflow.timing import build_timing
+            result = build_timing(**self._timing_params)
+            return result.get("steps", [])
+        except Exception:
+            return None
 
     def display_player(self):
         display(self.ui)
@@ -554,9 +572,12 @@ class StreamingTDGLPlayer:
         with self.output:
             clear_output(wait=True)
 
+        timing_steps = self._compute_timing_steps()
+
         self._player = create_player(
             self._h5_url, live=(status == "running"),
             playback_dt=self._playback_dt,
+            timing_steps=timing_steps,
             **self._s3_kwds,
         )
 
@@ -591,6 +612,7 @@ def create_player(
     h5_path: str,
     live: bool = False,
     playback_dt: float = 1.0,
+    timing_steps: list | None = None,
     **s3_kwds,
 ) -> RealtimeTDGLWidgetPlayer:
     """Create a widget player for an HDF5 file.
@@ -599,11 +621,15 @@ def create_player(
         h5_path: Path to the HDF5 file (local path or http:// URL for MinIO).
         live: If True, auto-plays and waits at the boundary for new frames.
         playback_dt: Simulation time per animation step (default 1.0).
+        timing_steps: Optional list of step dicts from build_timing() for
+                      step-averaged I-V curve.
         **s3_kwds: S3 credentials for ROS3 driver (s3_access_key, s3_secret_key).
     """
     mesh = load_mesh(h5_path, **s3_kwds)
     mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"], **s3_kwds)
     iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, **s3_kwds)
+    if timing_steps is not None:
+        iv_cache.set_timing_steps(timing_steps)
     iv_cache.ensure(0)
     iv_cache.start()
     player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, **s3_kwds)

@@ -35,6 +35,7 @@ class IVCache:
         self.t = []
         self.last_total = 0
         self.error = None
+        self._timing_steps = None
 
         self._tc_fn = _load_terminal_currents(h5_path, **s3_kwds)
 
@@ -145,6 +146,69 @@ class IVCache:
     def size(self):
         with self.lock:
             return len(self.I)
+
+    def set_timing_steps(self, steps):
+        """Set timing step boundaries for Je-step-averaged I-V."""
+        self._timing_steps = steps
+
+    def step_averaged_iv(self, current_frame_idx=None):
+        """Return I-V data averaged per completed Je step.
+
+        When timing steps are set, groups all cached frames into Je steps
+        by their time attribute and averages V over each step's save_time window.
+        Only fully completed steps (last frame time >= save_end) are included.
+
+        When no timing steps are set, falls back to raw frame-by-frame data
+        up to current_frame_idx.
+
+        Returns:
+            (I_arr, V_arr, n_completed_steps, total_steps)
+        """
+        if self._timing_steps is None:
+            upto = current_frame_idx
+            I, V, _ = self.arrays(upto=upto)
+            return I, V, len(I), 0
+
+        with self.lock:
+            t_all = list(self.t)
+            I_all = list(self.I)
+            V_all = list(self.V)
+
+        if not t_all:
+            return np.array([]), np.array([]), 0, len(self._timing_steps)
+
+        avg_I = []
+        avg_V = []
+        n_completed = 0
+
+        for step in self._timing_steps:
+            save_start = step["save_start"]
+            save_end = step["save_end"]
+
+            indices = [i for i, t in enumerate(t_all) if save_start <= t <= save_end]
+
+            if not indices:
+                continue
+
+            last_t = t_all[indices[-1]]
+            if last_t < save_end - 0.1:
+                continue
+
+            step_V = [V_all[i] for i in indices]
+            step_I = [I_all[i] for i in indices]
+            valid = [(i, v) for i, v in zip(step_I, step_V) if not np.isnan(v)]
+
+            if valid:
+                avg_I.append(float(np.mean([x[0] for x in valid])))
+                avg_V.append(float(np.mean([x[1] for x in valid])))
+                n_completed += 1
+
+        return (
+            np.array(avg_I),
+            np.array(avg_V),
+            n_completed,
+            len(self._timing_steps),
+        )
 
     def table(self, upto=None):
         """Return frame-by-frame I-V data for verification."""

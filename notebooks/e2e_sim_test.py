@@ -141,8 +141,10 @@ print(report["examine_text"])
 # ── Step 6: Static frame preview (direct MinIO read) ────────────────────
 from IPython.display import HTML, display
 import base64
+from tdgl_workflow.timing import build_timing
 
-player = create_player(h5_url, **s3_kwds)
+_timing = build_timing(**TIMING_PARAMS)
+player = create_player(h5_url, timing_steps=_timing.get("steps", []), **s3_kwds)
 print(f"Player: {player.total} frames")
 
 def show_frame(idx):
@@ -167,10 +169,10 @@ player.display_player()
 
 #%%
 # ── Step 8: I-V curve ───────────────────────────────────────────────────
-# Only plots frames with valid voltage data (NaN V values filtered out).
+# Step-averaged I-V: one point per completed Je step, V averaged over save_time.
 # Blue dot marks the current playback position.
-iv = player.get_iv_data()
-print(f"I-V points: {iv['n_points']}")
+iv = player.get_iv_data(step_averaged=True)
+print(f"I-V points (Je steps): {iv['n_points']}")
 print(f"I range: [{iv['I_range'][0]:.4f}, {iv['I_range'][1]:.4f}]")
 print(f"V range: [{iv['V_range'][0]:.4f}, {iv['V_range'][1]:.4f}]")
 

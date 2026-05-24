@@ -99,9 +99,26 @@ def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, **s3_kwds):
 
 def _draw_iv(draw, iv_cache, idx, box):
     iv_cache.ensure(idx)
-    hist_I, hist_V, _ = iv_cache.arrays(upto=idx)
-    cur_I, cur_V, cur_t = iv_cache.arrays(upto=idx)
-    I_min, I_max, V_min, V_max = iv_cache.ranges(upto=idx)
+    # Step-averaged curve uses ALL available data (not limited by playback)
+    avg_I, avg_V, n_completed, n_total = iv_cache.step_averaged_iv(
+        current_frame_idx=iv_cache.size() - 1,
+    )
+
+    # Current frame raw data for the position dot
+    cur_I_raw, cur_V_raw, _ = iv_cache.arrays(upto=idx)
+
+    # Compute ranges from step-averaged data + current dot
+    all_I = np.concatenate([avg_I, cur_I_raw[~np.isnan(cur_V_raw)]]) if len(avg_I) and len(cur_I_raw) else (avg_I if len(avg_I) else cur_I_raw)
+    all_V = np.concatenate([avg_V, cur_V_raw[~np.isnan(cur_V_raw)]]) if len(avg_V) and len(cur_V_raw) else (avg_V if len(avg_V) else cur_V_raw)
+    if len(all_I) == 0:
+        all_I = np.array([0.0, 1.0])
+        all_V = np.array([0.0, 1.0])
+    I_min, I_max = float(np.nanmin(all_I)), float(np.nanmax(all_I))
+    V_min, V_max = float(np.nanmin(all_V)), float(np.nanmax(all_V))
+    if I_min == I_max:
+        I_min -= 0.5; I_max += 0.5
+    if V_min == V_max:
+        V_min -= 0.5; V_max += 0.5
     I_den = I_max - I_min or 1.0
     V_den = V_max - V_min or 1.0
 
@@ -117,23 +134,32 @@ def _draw_iv(draw, iv_cache, idx, box):
         draw.text((x - 18, bottom + 8), f"{I_min + t / 4 * I_den:.2f}", fill=(150, 150, 150))
     draw.line([(left, top), (left, bottom), (right, bottom)], fill=(105, 105, 105), width=1)
 
-    pts = []
-    for I, V in zip(hist_I, hist_V):
-        if np.isnan(V):
-            if len(pts) > 1:
-                draw.line(pts, fill=(233, 69, 96), width=2)
-            pts = []
-            continue
-        x = left + (float(I) - I_min) / I_den * (right - left)
-        y = top + (1 - (float(V) - V_min) / V_den) * (bottom - top)
-        pts.append((x, y))
-    if len(pts) > 1:
-        draw.line(pts, fill=(233, 69, 96), width=2)
+    # Draw step-averaged I-V curve
+    if len(avg_I) > 1:
+        pts = []
+        for I_val, V_val in zip(avg_I, avg_V):
+            if np.isnan(V_val):
+                if len(pts) > 1:
+                    draw.line(pts, fill=(233, 69, 96), width=2)
+                pts = []
+                continue
+            x = left + (float(I_val) - I_min) / I_den * (right - left)
+            y = top + (1 - (float(V_val) - V_min) / V_den) * (bottom - top)
+            pts.append((x, y))
+        if len(pts) > 1:
+            draw.line(pts, fill=(233, 69, 96), width=2)
+        # Draw small dots at each completed step
+        for I_val, V_val in zip(avg_I, avg_V):
+            if np.isnan(V_val):
+                continue
+            x = left + (float(I_val) - I_min) / I_den * (right - left)
+            y = top + (1 - (float(V_val) - V_min) / V_den) * (bottom - top)
+            draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill=(233, 69, 96))
 
-    # Current position dot — only if V is valid
-    if len(cur_I) and not np.isnan(cur_V[-1]):
-        x = left + (float(cur_I[-1]) - I_min) / I_den * (right - left)
-        y = top + (1 - (float(cur_V[-1]) - V_min) / V_den) * (bottom - top)
+    # Current playback position dot (white on black)
+    if len(cur_I_raw) and not np.isnan(cur_V_raw[-1]):
+        x = left + (float(cur_I_raw[-1]) - I_min) / I_den * (right - left)
+        y = top + (1 - (float(cur_V_raw[-1]) - V_min) / V_den) * (bottom - top)
         draw.ellipse([x - 6, y - 6, x + 6, y + 6], fill=(0, 0, 0))
         draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 255, 255))
 
@@ -143,10 +169,12 @@ def _draw_iv(draw, iv_cache, idx, box):
         fill=(150, 150, 150),
     )
     draw.text((8, y0 + 70), "V", fill=(150, 150, 150))
-    n_valid = int(np.sum(~np.isnan(hist_V)))
-    if len(cur_t):
-        draw.text(
-            (right - 200, top + 4),
-            f"t={cur_t[-1]:.3g}, IV cached={n_valid}/{iv_cache.size()}",
-            fill=(150, 150, 150),
-        )
+    # Status line: completed steps / total steps
+    step_info = f"Je steps: {n_completed}/{n_total}" if n_total > 0 else f"IV cached={iv_cache.size()}"
+    cur_t_raw = iv_cache.t[:idx + 1] if idx + 1 <= len(iv_cache.t) else iv_cache.t
+    t_label = f"t={cur_t_raw[-1]:.3g}" if len(cur_t_raw) else "t=?"
+    draw.text(
+        (right - 250, top + 4),
+        f"{t_label}, {step_info}",
+        fill=(150, 150, 150),
+    )
