@@ -135,7 +135,7 @@ def _draw_iv(draw, iv_cache, idx, box):
     draw.line([(left, top), (left, bottom), (right, bottom)], fill=(105, 105, 105), width=1)
 
     # Draw step-averaged I-V curve
-    if len(avg_I) > 1:
+    if len(avg_I) >= 1:
         pts = []
         for I_val, V_val in zip(avg_I, avg_V):
             if np.isnan(V_val):

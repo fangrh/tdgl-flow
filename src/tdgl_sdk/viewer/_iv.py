@@ -154,12 +154,13 @@ class IVCache:
     def step_averaged_iv(self, current_frame_idx=None):
         """Return I-V data averaged per completed Je step.
 
-        When timing steps are set, groups all cached frames into Je steps
-        by their time attribute and averages V over each step's save_time window.
-        Only fully completed steps (last frame time >= save_end) are included.
+        Groups frames by full step period [ramp_start, stable_end) then
+        averages V over the stable period [ramp_end, stable_end] when
+        frames exist there, falling back to all frames in the step.
 
-        When no timing steps are set, falls back to raw frame-by-frame data
-        up to current_frame_idx.
+        A step is complete when its last frame time >= ramp_end (stable
+        period has started).  When no timing steps are set, falls back
+        to raw frame-by-frame data up to current_frame_idx.
 
         Returns:
             (I_arr, V_arr, n_completed_steps, total_steps)
@@ -182,20 +183,26 @@ class IVCache:
         n_completed = 0
 
         for step in self._timing_steps:
-            save_start = step["save_start"]
-            save_end = step["save_end"]
+            ramp_start = step["ramp_start"]
+            ramp_end = step["ramp_end"]
+            stable_end = step["stable_end"]
 
-            indices = [i for i, t in enumerate(t_all) if save_start <= t <= save_end]
-
+            # Group by full step period — much wider than save_time window
+            indices = [i for i, t in enumerate(t_all) if ramp_start <= t < stable_end]
             if not indices:
                 continue
 
+            # Step is complete when we have frames into the stable period
             last_t = t_all[indices[-1]]
-            if last_t < save_end - 0.1:
+            if last_t < ramp_end:
                 continue
 
-            step_V = [V_all[i] for i in indices]
-            step_I = [I_all[i] for i in indices]
+            # Prefer averaging over stable period; fall back to all step frames
+            stable_idx = [i for i in indices if t_all[i] >= ramp_end]
+            use_idx = stable_idx if stable_idx else indices
+
+            step_V = [V_all[i] for i in use_idx]
+            step_I = [I_all[i] for i in use_idx]
             valid = [(i, v) for i, v in zip(step_I, step_V) if not np.isnan(v)]
 
             if valid:
