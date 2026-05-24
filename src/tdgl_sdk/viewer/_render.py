@@ -101,6 +101,43 @@ def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, debug_log=None, **s3
     return buf.getvalue()
 
 
+def render_frame_2x2(h5_path, mesh, iv_cache, mu_vmax, idx, debug_log=None, **s3_kwds):
+    """Render a 2x2 panel frame: psi, mu, V-vs-t, I-V."""
+    idx = int(idx)
+    points = mesh["points"]
+    grid_pts = mesh["grid_pts"]
+    total = mesh["total_frames"]
+
+    canvas = Image.new("RGBA", (FRAME_W, FRAME_H), (30, 30, 30, 255))
+    draw = ImageDraw.Draw(canvas)
+
+    psi_arr = field_rgba(h5_path, points, grid_pts, idx, "psi", mu_vmax, **s3_kwds)
+    mu_arr = field_rgba(h5_path, points, grid_pts, idx, "mu", mu_vmax, **s3_kwds)
+    psi_img = Image.fromarray(psi_arr, mode="RGBA").resize(
+        (PANEL_W, PANEL_H), Image.Resampling.NEAREST
+    )
+    mu_img = Image.fromarray(mu_arr, mode="RGBA").resize(
+        (PANEL_W, PANEL_H), Image.Resampling.NEAREST
+    )
+    canvas.paste(psi_img, (14, 42))
+    canvas.paste(mu_img, (386, 42))
+
+    draw.text((14, 16), f"TDGL frame {idx} / {total - 1}", fill=(235, 235, 235))
+    draw.text((156, 226), "|psi| inferno", fill=(120, 120, 120))
+    draw.text((528, 226), "mu RdBu", fill=(120, 120, 120))
+
+    # Bottom panels: V-vs-t (left), I-V (right)
+    half_w = (746 - 14) // 2
+    vt_box = (14, 252, 14 + half_w, 454)
+    iv_box = (14 + half_w + 10, 252, 746, 454)
+    _draw_vt(draw, iv_cache, idx, vt_box, debug_log=debug_log)
+    _draw_iv(draw, iv_cache, idx, iv_box, debug_log=debug_log)
+
+    buf = io.BytesIO()
+    canvas.convert("RGB").save(buf, format="PNG", optimize=False)
+    return buf.getvalue()
+
+
 def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
     iv_cache.ensure(idx)
     # Step-averaged curve uses ALL available data (not limited by playback)
