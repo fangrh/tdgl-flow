@@ -76,12 +76,12 @@ class RealtimeTDGLWidgetPlayer:
         self.speed_input = widgets.IntText(
             value=1,
             description="Speed",
-            layout=widgets.Layout(width="120px"),
+            layout=widgets.Layout(min_width="80px", max_width="120px"),
         )
         self.iv_speed = widgets.IntText(
             value=iv_cache.batch_size,
             description="I-V batch",
-            layout=widgets.Layout(width="140px"),
+            layout=widgets.Layout(min_width="90px", max_width="140px"),
         )
         self.status = widgets.Label(value="buffer [0]")
 
