@@ -32,9 +32,9 @@ spec:
                   key: session-secret
           livenessProbe:
             httpGet:
-              path: /device
+              path: /docs
               port: 8000
           readinessProbe:
             httpGet:
-              path: /device
+              path: /docs
               port: 8000
