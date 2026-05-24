@@ -187,3 +187,66 @@ def _draw_iv(draw, iv_cache, idx, box, debug_log=None):
         f"{t_label}, {step_info}",
         fill=(150, 150, 150),
     )
+
+
+def _draw_vt(draw, iv_cache, idx, box, debug_log=None):
+    """Draw voltage vs time plot with a playback position dot."""
+    iv_cache.ensure(idx)
+    _, V_all, t_all = iv_cache.arrays(upto=idx)
+    if len(t_all) == 0:
+        t_all = np.array([0.0, 1.0])
+        V_all = np.array([0.0, 1.0])
+
+    valid = ~np.isnan(V_all)
+    t_valid = t_all[valid]
+    V_valid = V_all[valid]
+    if len(t_valid) == 0:
+        t_valid = np.array([0.0, 1.0])
+        V_valid = np.array([0.0, 1.0])
+
+    t_min, t_max = float(t_valid.min()), float(t_valid.max())
+    V_min, V_max = float(V_valid.min()), float(V_valid.max())
+    if t_min == t_max:
+        t_min -= 0.5; t_max += 0.5
+    if V_min == V_max:
+        V_min -= 0.5; V_max += 0.5
+    t_den = t_max - t_min or 1.0
+    V_den = V_max - V_min or 1.0
+
+    x0, y0, x1, y1 = box
+    left, right, top, bottom = x0 + 54, x1 - 20, y0 + 18, y1 - 34
+    draw.rectangle([x0, y0, x1, y1], fill=(30, 30, 30))
+
+    # Grid lines + tick labels
+    for t in range(5):
+        y = top + (1 - t / 4) * (bottom - top)
+        draw.line([(left, y), (right, y)], fill=(50, 50, 50))
+        draw.text((left - 48, y - 6), f"{V_min + t / 4 * V_den:.2f}", fill=(150, 150, 150))
+    for t in range(5):
+        x = left + t / 4 * (right - left)
+        draw.text((x - 18, bottom + 8), f"{t_min + t / 4 * t_den:.2g}", fill=(150, 150, 150))
+    draw.line([(left, top), (left, bottom), (right, bottom)], fill=(105, 105, 105), width=1)
+
+    # Blue V-vs-t trace
+    pts = []
+    for t_val, V_val in zip(t_valid, V_valid):
+        x = left + (float(t_val) - t_min) / t_den * (right - left)
+        y = top + (1 - (float(V_val) - V_min) / V_den) * (bottom - top)
+        pts.append((x, y))
+    if len(pts) > 1:
+        draw.line(pts, fill=(100, 149, 237), width=2)
+
+    # Current playback position dot (white on black)
+    if len(t_valid) and not np.isnan(V_valid[-1]):
+        x = left + (float(t_valid[-1]) - t_min) / t_den * (right - left)
+        y = top + (1 - (float(V_valid[-1]) - V_min) / V_den) * (bottom - top)
+        draw.ellipse([x - 6, y - 6, x + 6, y + 6], fill=(0, 0, 0))
+        draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, 255, 255))
+
+    # Axis labels
+    draw.text(
+        ((left + right) // 2 - 18, y1 - 18),
+        "t",
+        fill=(150, 150, 150),
+    )
+    draw.text((8, y0 + 70), "V", fill=(150, 150, 150))
