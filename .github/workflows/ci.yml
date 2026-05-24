@@ -63,7 +63,7 @@ jobs:
           CHANGES=$(git diff --name-only "$BASE" HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD)
           echo "$CHANGES"
           PY_RUNNER=false
-          echo "$CHANGES" | grep -qE "^(services/py-tdgl-runner/|src/tdgl_sdk/|src/tdgl_workflow/|pyproject.toml)" && PY_RUNNER=true
+          echo "$CHANGES" | grep -qE "^(services/py-tdgl-runner/(Dockerfile|build_device.py|build_timing.py|runner.py)|src/tdgl_sdk/|src/tdgl_workflow/|pyproject.toml)" && PY_RUNNER=true
           # Shared library changes rebuild py-runner because its image vendors them.
           echo "$CHANGES" | grep -qE "^src/tdgl_sdk/" && PY_RUNNER=true
           echo "$CHANGES" | grep -qE "^src/tdgl_workflow/" && PY_RUNNER=true
