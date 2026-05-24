@@ -18,6 +18,7 @@ spec:
         - name: runner
           image: ghcr.io/fangrh/py-tdgl-runner:bfcee07
           imagePullPolicy: Always
+          command: [python, -c, "import time; time.sleep(10**9)"]
           ports:
             - containerPort: 8000
           resources:
