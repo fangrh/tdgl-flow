@@ -99,9 +99,9 @@ def render_frame_png(h5_path, mesh, iv_cache, mu_vmax, idx, **s3_kwds):
 
 def _draw_iv(draw, iv_cache, idx, box):
     iv_cache.ensure(idx)
-    hist_I, hist_V, _ = iv_cache.arrays()
+    hist_I, hist_V, _ = iv_cache.arrays(upto=idx)
     cur_I, cur_V, cur_t = iv_cache.arrays(upto=idx)
-    I_min, I_max, V_min, V_max = iv_cache.ranges()
+    I_min, I_max, V_min, V_max = iv_cache.ranges(upto=idx)
     I_den = I_max - I_min or 1.0
     V_den = V_max - V_min or 1.0
 
@@ -119,12 +119,19 @@ def _draw_iv(draw, iv_cache, idx, box):
 
     pts = []
     for I, V in zip(hist_I, hist_V):
+        if np.isnan(V):
+            if len(pts) > 1:
+                draw.line(pts, fill=(233, 69, 96), width=2)
+            pts = []
+            continue
         x = left + (float(I) - I_min) / I_den * (right - left)
         y = top + (1 - (float(V) - V_min) / V_den) * (bottom - top)
         pts.append((x, y))
     if len(pts) > 1:
         draw.line(pts, fill=(233, 69, 96), width=2)
-    if len(cur_I):
+
+    # Current position dot — only if V is valid
+    if len(cur_I) and not np.isnan(cur_V[-1]):
         x = left + (float(cur_I[-1]) - I_min) / I_den * (right - left)
         y = top + (1 - (float(cur_V[-1]) - V_min) / V_den) * (bottom - top)
         draw.ellipse([x - 6, y - 6, x + 6, y + 6], fill=(0, 0, 0))
@@ -136,9 +143,10 @@ def _draw_iv(draw, iv_cache, idx, box):
         fill=(150, 150, 150),
     )
     draw.text((8, y0 + 70), "V", fill=(150, 150, 150))
+    n_valid = int(np.sum(~np.isnan(hist_V)))
     if len(cur_t):
         draw.text(
             (right - 200, top + 4),
-            f"t={cur_t[-1]:.3g}, IV cached={iv_cache.size()}",
+            f"t={cur_t[-1]:.3g}, IV cached={n_valid}/{iv_cache.size()}",
             fill=(150, 150, 150),
         )

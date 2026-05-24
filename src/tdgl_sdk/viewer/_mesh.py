@@ -24,6 +24,9 @@ def load_mesh(h5_path, **s3_kwds):
         points = np.array(f["solution/device/mesh/sites"])
         edges = np.array(f["solution/device/mesh/edge_mesh/edges"])
         edge_dirs = np.array(f["solution/device/mesh/edge_mesh/directions"])
+        edge_lens = np.linalg.norm(edge_dirs, axis=1, keepdims=True)
+        edge_lens[edge_lens == 0] = 1.0
+        norm_dirs = edge_dirs / edge_lens
         dual_lengths = np.array(f["solution/device/mesh/edge_mesh/dual_edge_lengths"])
         total = len(f["data"].keys())
 
@@ -41,6 +44,7 @@ def load_mesh(h5_path, **s3_kwds):
         "points": points,
         "edges": edges,
         "edge_dirs": edge_dirs,
+        "norm_dirs": norm_dirs,
         "dual_lengths": dual_lengths,
         "cross": cross,
         "grid_pts": grid_pts,

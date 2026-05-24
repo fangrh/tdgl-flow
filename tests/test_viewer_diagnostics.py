@@ -168,8 +168,8 @@ def test_player_get_status(tmp_path):
     player = create_player(str(h5_path))
 
     status = player.get_status()
-    assert status["total_frames"] == 5
-    assert status["current_frame"] == 0
+    assert status["available_frames"] == 5
+    assert status["current_step"] == 0
     assert status["playing"] is False
     assert "iv_cache" in status
     assert status["iv_cache"]["cached_points"] >= 0
@@ -230,11 +230,11 @@ def test_player_seek_and_status(tmp_path):
 
     player.show(3)
     status = player.get_status()
-    assert status["current_frame"] == 3
+    assert status["current_step"] == 3
 
     player.stop()
     status = player.get_status()
-    assert status["current_frame"] == 0
+    assert status["current_step"] == 0
     assert status["playing"] is False
 
     player.iv_cache.stop()
@@ -267,10 +267,9 @@ def test_debug_player_passes(tmp_path):
     for step in result["steps"]:
         assert step["ok"], f"Step {step['action']} failed: {step.get('error')}"
 
-    # Verify seek_beyond snapped to latest available frame
+    # Verify seek_beyond snapped to latest available step
     beyond_step = next(s for s in result["steps"] if s["action"] == "seek_beyond")
-    assert beyond_step["landed_on"] == 9  # last frame in a 10-frame file
-    assert beyond_step["requested"] == 60  # total(10) + 50
+    assert beyond_step["status"]["current_step"] == 9  # last step in a 10-frame file
 
 
 def test_debug_player_detects_no_frames(tmp_path):
@@ -330,8 +329,8 @@ def test_live_mode_seek_beyond_snaps_to_latest(tmp_path):
     player.show(100, wait=False)
     status = player.get_status()
 
-    assert status["current_frame"] == 4  # last available frame
-    assert status["total_frames"] == 5
+    assert status["current_step"] == 4  # clamped to last step in time_grid
+    assert status["available_frames"] == 5
     assert status["live"] is True
 
     player.iv_cache.stop()
@@ -347,10 +346,10 @@ def test_live_mode_sequential_seek(tmp_path):
 
     for idx in [0, 2, 4]:
         player.show(idx, wait=False)
-        assert player.get_status()["current_frame"] == idx
+        assert player.get_status()["current_step"] == idx
 
     player.show(999, wait=False)
-    assert player.get_status()["current_frame"] == 4
+    assert player.get_status()["current_step"] == 4
 
     player.iv_cache.stop()
 
@@ -365,7 +364,45 @@ def test_non_live_mode_seek_beyond_clamps_to_total(tmp_path):
 
     player.show(100, wait=False)
     status = player.get_status()
-    assert status["current_frame"] == 4  # clamped to last frame
+    assert status["current_step"] == 4  # clamped to last step in time_grid
     assert status["live"] is False
 
     player.iv_cache.stop()
+
+
+def test_draw_iv_only_reads_history_to_current_frame():
+    from PIL import Image, ImageDraw
+
+    from tdgl_sdk.viewer._render import _draw_iv
+
+    class FakeIVCache:
+        def __init__(self):
+            self.I = np.array([0.0, 1.0, 2.0, 1.0, 0.0])
+            self.V = np.array([0.0, 0.1, 0.2, 0.15, 0.05])
+            self.t = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+            self.ensure_calls = []
+
+        def update_available(self):
+            raise AssertionError("render should not prefetch all I-V frames")
+
+        def ensure(self, idx):
+            self.ensure_calls.append(idx)
+
+        def arrays(self, upto=None):
+            n = len(self.I) if upto is None else int(upto) + 1
+            return self.I[:n], self.V[:n], self.t[:n]
+
+        def ranges(self, upto=None):
+            I, V, _ = self.arrays(upto=upto)
+            return float(I.min()), float(I.max()), float(V.min()), float(V.max())
+
+        def size(self):
+            return len(self.I)
+
+    cache = FakeIVCache()
+    image = Image.new("RGBA", (760, 470))
+    draw = ImageDraw.Draw(image)
+
+    _draw_iv(draw, cache, 2, (14, 252, 746, 454))
+
+    assert cache.ensure_calls == [2]

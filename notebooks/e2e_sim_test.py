@@ -31,29 +31,29 @@ MINIO_ENDPOINT = "http://localhost:30900"
 
 DEVICE_PARAMS = {
     "film_width": 6.0,
-    "film_height": 2.0,
-    "elec_width": 0.5,
-    "elec_height": 1.0,
+    "film_height": 4.0,
+    "elec_width": 0.2,
+    "elec_height": 4.1,
     "elec_y_offset": 0.0,
-    "probe_points": [[-2.0, 0.0], [2.0, 0.0]],
-    "max_edge_length": 0.5,
+    "probe_points": [[-1.0, 0.0], [1.0, 0.0]],
+    "max_edge_length": 0.25,
     "smooth": 100,
 }
 
 TIMING_PARAMS = {
     "je_initial": 0.0,
-    "je_final": 0.5,
-    "je_step": 0.5,
-    "ramp_time": 2.0,
-    "stable_time": 3.0,
-    "save_time": 2.0,
+    "je_final": 12,
+    "je_step": 0.2,
+    "ramp_time": 100.0,
+    "stable_time": 200.0,
+    "save_time": 50.0,
     "ramp_down": False,
 }
 
 SOLVER_OPTIONS = {
     "dt_init": 1e-4,
     "dt_max": 0.1,
-    "save_every": 500,
+    "save_every": 10000,
 }
 
 print("Config ready")
@@ -113,7 +113,7 @@ status = live_player.get_status()
 print(f"\nLive viewer: watching={status['watching']}, url={status['h5_url']}")
 if "player" in status:
     p = status["player"]
-    print(f"  Frames: {p['total']}, Current: {p['current']}, Playing: {p['playing']}")
+    print(f"  Frames: {p['available_frames']}, Step: {p['current_step']}/{p['total_steps']}, Playing: {p['playing']}")
 
 #%%
 # ── Step 4: Poll until complete (blocks) ────────────────────────────────
@@ -167,6 +167,8 @@ player.display_player()
 
 #%%
 # ── Step 8: I-V curve ───────────────────────────────────────────────────
+# Only plots frames with valid voltage data (NaN V values filtered out).
+# Blue dot marks the current playback position.
 iv = player.get_iv_data()
 print(f"I-V points: {iv['n_points']}")
 print(f"I range: [{iv['I_range'][0]:.4f}, {iv['I_range'][1]:.4f}]")
@@ -176,9 +178,13 @@ import matplotlib.pyplot as plt
 
 fig, ax = plt.subplots(1, 1, figsize=(6, 4))
 ax.plot(iv["I"], iv["V"], "r-", linewidth=1)
+if iv["current_I"] is not None and iv["current_V"] is not None:
+    import math
+    if not (math.isnan(iv["current_V"]) or math.isnan(iv["current_I"])):
+        ax.plot(iv["current_I"], iv["current_V"], "bo", markersize=8, zorder=5)
 ax.set_xlabel("I (transport current)")
 ax.set_ylabel("V (voltage)")
-ax.set_title(f"I-V Curve ({iv['n_points']} points)")
+ax.set_title(f"I-V Curve ({iv['n_points']} valid points)")
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()

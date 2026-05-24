@@ -12,10 +12,38 @@ import threading
 from datetime import datetime, timezone
 
 import boto3
+import numpy as np
 import tdgl
 from botocore.config import Config as BotoConfig
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
+
+
+class SaveWindowTimeline:
+    def __init__(self) -> None:
+        self.offset = 0.0
+
+    def map_physical(self, *, save_start: float, physical_time: float) -> float:
+        return self.offset + max(0.0, physical_time - save_start)
+
+    def finish_window(self, *, save_time: float) -> None:
+        self.offset += save_time
+
+
+def _group_solution_indices_by_save_window(times: np.ndarray, steps: list[dict]) -> list[list[int]]:
+    grouped = []
+    for step in steps:
+        indices = [
+            int(i)
+            for i, time_value in enumerate(times)
+            if step["save_start"] <= float(time_value) <= step["save_end"]
+        ]
+        if not indices:
+            raise RuntimeError(
+                f"No saved frames found in save window [{step['save_start']}, {step['save_end']}]"
+            )
+        grouped.append(indices)
+    return grouped
 
 
 def _get_minio_client():
@@ -55,6 +83,30 @@ def _periodic_upload(output_path, bucket, run_id, stop_event, interval=30):
                 pass
 
 
+def _terminal_currents_from_steps(steps):
+    """Build the py-tdgl terminal current function for a timing schedule."""
+    def get_terminal_currents(t):
+        for step in steps:
+            if t < step["ramp_start"]:
+                continue
+            ramp_duration = step["ramp_end"] - step["ramp_start"]
+            if ramp_duration > 0 and t <= step["ramp_end"]:
+                frac = (t - step["ramp_start"]) / ramp_duration
+                je = step["je_start"] + frac * (step["je_end"] - step["je_start"])
+                return {"source": je, "drain": -je}
+            if t <= step["stable_end"]:
+                return {"source": step["je_end"], "drain": -step["je_end"]}
+
+        if steps:
+            # Solver callbacks can be evaluated just past solve_time. Holding the
+            # final scheduled current avoids a spurious return-to-zero I-V tail.
+            je = steps[-1]["je_end"]
+            return {"source": je, "drain": -je}
+        return {"source": 0.0, "drain": 0.0}
+
+    return get_terminal_currents
+
+
 def main() -> None:
     run_id = os.environ["TDGL_RUN_ID"]
     solver_options_raw = os.environ.get("SOLVER_OPTIONS", "{}")
@@ -79,18 +131,7 @@ def main() -> None:
 
     steps = timing_data["steps"] + timing_data.get("ramp_down_steps", [])
 
-    def get_terminal_currents(t):
-        for step in steps:
-            if t < step["ramp_start"]:
-                continue
-            ramp_duration = step["ramp_end"] - step["ramp_start"]
-            if ramp_duration > 0 and t <= step["ramp_end"]:
-                frac = (t - step["ramp_start"]) / ramp_duration
-                je = step["je_start"] + frac * (step["je_end"] - step["je_start"])
-                return {"source": je, "drain": -je}
-            if t <= step["stable_end"]:
-                return {"source": step["je_end"], "drain": -step["je_end"]}
-        return {"source": 0.0, "drain": 0.0}
+    get_terminal_currents = _terminal_currents_from_steps(steps)
 
     output_path = os.path.join(DATA_DIR, "output.h5")
 

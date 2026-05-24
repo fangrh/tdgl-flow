@@ -8,3 +8,15 @@ __pycache__/
 /data-viewer/
 bind/
 .worktrees/
+.gstack/
+
+# Local notebook/runtime artifacts
+notebooks/.ipynb_checkpoints/
+notebooks/.jupyter/
+notebooks/.virtual_documents/
+notebooks/.jupyter_ystore.db
+notebooks/__marimo__/
+notebooks/artifacts/
+notebooks/experimental/
+notebooks/scratch/
+notebooks/*.h5

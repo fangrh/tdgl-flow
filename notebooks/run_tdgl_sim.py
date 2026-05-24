@@ -1,3 +1,4 @@
+#%%
 """End-to-end TDGL simulation test via Argo Workflows.
 
 Uses the SimulationPipeline SDK to: submit workflow, poll until completion,
@@ -11,6 +12,7 @@ Prerequisites:
     Argo Workflows accessible at localhost:30080 (nginx ingress)
     kubectl port-forward -n tdgl svc/minio 30900:9000
 """
+#%%
 import sys
 from pathlib import Path
 
@@ -110,3 +112,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# %%

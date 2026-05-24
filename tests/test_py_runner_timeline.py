@@ -37,3 +37,27 @@ def test_playback_time_from_physical_time_concatenates_windows():
     assert mapper.map_physical(save_start=3.0, physical_time=5.0) == pytest.approx(2.0)
     mapper.finish_window(save_time=2.0)
     assert mapper.map_physical(save_start=8.0, physical_time=8.0) == pytest.approx(2.0)
+
+
+def test_terminal_currents_hold_final_step_after_schedule():
+    runner = load_runner()
+    get_terminal_currents = runner._terminal_currents_from_steps([
+        {
+            "je_start": 0.0,
+            "je_end": 1.0,
+            "ramp_start": 0.0,
+            "ramp_end": 1.0,
+            "stable_end": 3.0,
+        },
+        {
+            "je_start": 1.0,
+            "je_end": 2.0,
+            "ramp_start": 3.0,
+            "ramp_end": 4.0,
+            "stable_end": 6.0,
+        },
+    ])
+
+    assert get_terminal_currents(0.5)["source"] == pytest.approx(0.5)
+    assert get_terminal_currents(5.0)["source"] == pytest.approx(2.0)
+    assert get_terminal_currents(6.000001)["source"] == pytest.approx(2.0)
