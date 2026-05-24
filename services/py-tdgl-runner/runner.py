@@ -117,6 +117,8 @@ def main() -> None:
         output_file=output_path,
     )
 
+    raw_timing_params = json.loads(os.environ.get("TIMING_PARAMS", "{}"))
+
     # Upload "running" manifest so viewer knows the simulation is in progress
     _upload_manifest({
         "run_id": run_id,
@@ -136,6 +138,8 @@ def main() -> None:
             "n_steps": timing_data["n_steps"],
             "solve_time": timing_data["solve_time"],
         },
+        "timing_steps": timing_data.get("steps", []),
+        "raw_timing_params": raw_timing_params,
         "solver_options": solver_options,
     }, bucket, run_id)
 
@@ -179,6 +183,8 @@ def main() -> None:
                 "n_steps": timing_data["n_steps"],
                 "solve_time": timing_data["solve_time"],
             },
+            "timing_steps": timing_data.get("steps", []),
+            "raw_timing_params": raw_timing_params,
             "solver_options": solver_options,
         }
         _upload_manifest(manifest, bucket, run_id)

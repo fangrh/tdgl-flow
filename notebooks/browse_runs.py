@@ -63,6 +63,7 @@ print(f"  Solver: {selected.get('solver_options')}")
 #%%
 # ── Step 3: Display player ──────────────────────────────────────────────
 # Reads HDF5 directly from MinIO via ROS3 — no local download.
+# Uses timing_steps from manifest for step-averaged I-V (smooth curve).
 from tdgl_sdk.viewer._player import create_player
 
 h5_url = store.h5_url(run_id)
@@ -71,8 +72,19 @@ s3_kwds = {
     "s3_secret_key": store.s3._request_signer._credentials.secret_key,
 }
 
-player = create_player(h5_url, debug=True, **s3_kwds)
-print(f"Player: {player.total} frames")
+timing_steps = selected.get("timing_steps") or None
+if timing_steps is None:
+    raw_tp = selected.get("raw_timing_params") or {}
+    if raw_tp.get("je_step"):
+        try:
+            from tdgl_workflow.timing import build_timing
+            td = build_timing(**raw_tp)
+            timing_steps = td.get("steps", [])
+        except Exception:
+            pass
+
+player = create_player(h5_url, timing_steps=timing_steps, average_time=50.0, debug=True, **s3_kwds)
+print(f"Player: {player.total} frames, timing_steps: {len(timing_steps) if timing_steps else 0}")
 player.display_player()
 
 #%%
@@ -81,7 +93,7 @@ import math
 
 import matplotlib.pyplot as plt
 
-iv = player.get_iv_data()
+iv = player.get_iv_data(step_averaged=bool(timing_steps))
 print(f"I-V points: {iv['n_points']}")
 print(f"I range: [{iv['I_range'][0]:.4f}, {iv['I_range'][1]:.4f}]")
 print(f"V range: [{iv['V_range'][0]:.4f}, {iv['V_range'][1]:.4f}]")
