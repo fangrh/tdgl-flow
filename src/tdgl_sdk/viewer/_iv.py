@@ -21,7 +21,7 @@ def _load_terminal_currents(h5_path, **s3_kwds):
 class IVCache:
     """Incremental I-V cache for an HDF5 file."""
 
-    def __init__(self, h5_path, mesh, poll_interval=1.0, batch_size=64, **s3_kwds):
+    def __init__(self, h5_path, mesh, poll_interval=1.0, batch_size=64, debug_log=None, **s3_kwds):
         self.h5_path = h5_path
         self._mesh = mesh
         self._s3_kwds = s3_kwds
@@ -36,6 +36,7 @@ class IVCache:
         self.last_total = 0
         self.error = None
         self._timing_steps = None
+        self._debug = debug_log
 
         self._tc_fn = _load_terminal_currents(h5_path, **s3_kwds)
 
@@ -90,6 +91,8 @@ class IVCache:
         with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             available = len(f["data"].keys())
             end = available if target is None else min(available, int(target) + 1)
+            if self._debug:
+                self._debug.log("iv_update_start", cached=start, target=target)
             while start < end:
                 batch_end = min(end, start + self.batch_size)
                 batch = [self._frame_iv(f, i) for i in range(start, batch_end)]
@@ -99,6 +102,8 @@ class IVCache:
                     self.t.extend(x[2] for x in batch)
                     self.last_total = available
                 start = batch_end
+        if self._debug:
+            self._debug.log("iv_update_done", new=end - start, total=len(self.I))
         return self.size()
 
     def ensure(self, idx):
@@ -168,6 +173,8 @@ class IVCache:
         if self._timing_steps is None:
             upto = current_frame_idx
             I, V, _ = self.arrays(upto=upto)
+            if self._debug:
+                self._debug.log("step_avg_fallback", n=len(I))
             return I, V, len(I), 0
 
         with self.lock:
@@ -209,6 +216,14 @@ class IVCache:
                 avg_I.append(float(np.mean([x[0] for x in valid])))
                 avg_V.append(float(np.mean([x[1] for x in valid])))
                 n_completed += 1
+
+        if self._debug:
+            self._debug.log(
+                "step_avg", n_completed=n_completed,
+                n_total=len(self._timing_steps),
+                avg_I=[round(x, 4) for x in avg_I[:5]],
+                avg_V=[round(x, 4) for x in avg_V[:5]],
+            )
 
         return (
             np.array(avg_I),
