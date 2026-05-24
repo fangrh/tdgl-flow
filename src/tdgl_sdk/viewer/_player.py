@@ -50,11 +50,6 @@ class RealtimeTDGLWidgetPlayer:
         self.play_button = widgets.Button(
             description="Play", icon="play", layout=widgets.Layout(width="92px")
         )
-        self.speed_input = widgets.IntText(
-            value=1,
-            description="Speed",
-            layout=widgets.Layout(width="130px"),
-        )
         self.slider = widgets.IntSlider(
             value=0,
             min=0,
@@ -63,30 +58,41 @@ class RealtimeTDGLWidgetPlayer:
             description="Frame",
             continuous_update=False,
             readout=False,
-            layout=widgets.Layout(width="400px"),
+            layout=widgets.Layout(width="500px"),
         )
         self.time_label = widgets.Label(
             value=self._fmt_frame(0),
-            layout=widgets.Layout(width="200px"),
+            layout=widgets.Layout(width="220px"),
         )
         self.fps = widgets.IntSlider(
             value=FPS_DEFAULT,
             min=1,
-            max=20,
+            max=30,
             step=1,
             description="FPS",
             continuous_update=False,
-            layout=widgets.Layout(width="220px"),
+            layout=widgets.Layout(width="180px"),
+        )
+        self.speed_input = widgets.IntText(
+            value=1,
+            description="Speed",
+            layout=widgets.Layout(width="120px"),
+        )
+        self.iv_speed = widgets.IntText(
+            value=iv_cache.batch_size,
+            description="I-V batch",
+            layout=widgets.Layout(width="140px"),
         )
         self.status = widgets.Label(value="buffer [0]")
 
         self.play_button.on_click(self.toggle)
         self.speed_input.observe(self._on_speed, names="value")
+        self.iv_speed.observe(self._on_iv_speed, names="value")
         self.slider.observe(self._on_slider, names="value")
 
         self.ui = widgets.VBox([
-            widgets.HBox([self.play_button, self.speed_input, self.slider, self.time_label]),
-            widgets.HBox([self.fps, self.status]),
+            widgets.HBox([self.play_button, self.slider, self.time_label]),
+            widgets.HBox([self.fps, self.speed_input, self.iv_speed, self.status]),
             self.image,
         ])
 
@@ -194,6 +200,10 @@ class RealtimeTDGLWidgetPlayer:
         self.show(self.current, wait=False)
         if was_playing:
             self.play()
+
+    def _on_iv_speed(self, change):
+        new_batch = max(1, int(change.get("new", 128)))
+        self.iv_cache.batch_size = new_batch
 
     def toggle(self, _=None):
         if self.playing:
@@ -556,6 +566,8 @@ def create_player(
     iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, debug_log=debug_log, **s3_kwds)
     if timing_steps is not None:
         iv_cache.set_timing_steps(timing_steps, average_time=average_time)
+    if not live:
+        iv_cache.batch_size = 512
     iv_cache.ensure(0)
     iv_cache.start()
     player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, debug_log=debug_log, **s3_kwds)
