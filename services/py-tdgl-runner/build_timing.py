@@ -18,7 +18,6 @@ def main():
             segments=timing_params["segments"],
             ramp_time=timing_params["ramp_time"],
             stable_time=timing_params["stable_time"],
-            save_time=timing_params["save_time"],
             initial_stable_time=timing_params.get("initial_stable_time"),
         )
     else:
@@ -28,7 +27,6 @@ def main():
             je_step=timing_params["je_step"],
             ramp_time=timing_params["ramp_time"],
             stable_time=timing_params["stable_time"],
-            save_time=timing_params["save_time"],
             ramp_down=timing_params.get("ramp_down", False),
         )
 

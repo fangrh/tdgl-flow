@@ -46,14 +46,16 @@ TIMING_PARAMS = {
     "je_step": 0.2,
     "ramp_time": 100.0,
     "stable_time": 200.0,
-    "save_time": 50.0,
     "ramp_down": False,
 }
+
+# I-V averaging: average V over the last average_time of each step's stable period.
+AVERAGE_TIME = 50.0
 
 SOLVER_OPTIONS = {
     "dt_init": 1e-4,
     "dt_max": 0.1,
-    "save_every": 10000,
+    "save_every": 50,
 }
 
 print("Config ready")
@@ -95,6 +97,7 @@ live_player = pipeline.watch_live(
     run_id, poll_interval=10,
     timing_params=TIMING_PARAMS,
     solver_options=SOLVER_OPTIONS,
+    average_time=AVERAGE_TIME,
     debug=True,
 )
 live_player.display_player()
@@ -165,7 +168,7 @@ import base64
 from tdgl_workflow.timing import build_timing
 
 _timing = build_timing(**TIMING_PARAMS)
-player = create_player(h5_url, timing_steps=_timing.get("steps", []), debug=True, **s3_kwds)
+player = create_player(h5_url, timing_steps=_timing.get("steps", []), average_time=AVERAGE_TIME, debug=True, **s3_kwds)
 print(f"Player: {player.total} frames")
 
 def show_frame(idx):
@@ -190,7 +193,7 @@ player.display_player()
 
 #%%
 # ── Step 8: I-V curve ───────────────────────────────────────────────────
-# Step-averaged I-V: one point per completed Je step, V averaged over save_time.
+# Step-averaged I-V: one point per completed Je step, V averaged over average_time.
 # Blue dot marks the current playback position.
 iv = player.get_iv_data(step_averaged=True)
 print(f"I-V points (Je steps): {iv['n_points']}")

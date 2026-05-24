@@ -449,7 +449,8 @@ class StreamingTDGLPlayer:
     """
 
     def __init__(self, store, run_id, poll_interval=15, argo_host=None,
-                 timing_params=None, solver_options=None, playback_dt=1.0, debug=False):
+                 timing_params=None, solver_options=None, playback_dt=1.0,
+                 average_time=None, debug=False):
         if widgets is None:
             raise ImportError("ipywidgets is required")
 
@@ -462,6 +463,7 @@ class StreamingTDGLPlayer:
         self._player = None
         self._completed = False
         self._timing_params = timing_params
+        self._average_time = average_time
         self._solver_options = solver_options or {}
         self._playback_dt = playback_dt
         self._debug_flag = debug
@@ -599,6 +601,7 @@ class StreamingTDGLPlayer:
             self._h5_url, live=(status == "running"),
             playback_dt=self._playback_dt,
             timing_steps=timing_steps,
+            average_time=self._average_time,
             debug=self._debug_flag,
             debug_log=self._debug,
             **self._s3_kwds,
@@ -636,6 +639,7 @@ def create_player(
     live: bool = False,
     playback_dt: float = 1.0,
     timing_steps: list | None = None,
+    average_time: float | None = None,
     debug: bool = False,
     debug_log=None,
     **s3_kwds,
@@ -648,6 +652,8 @@ def create_player(
         playback_dt: Simulation time per animation step (default 1.0).
         timing_steps: Optional list of step dicts from build_timing() for
                       step-averaged I-V curve.
+        average_time: Duration at end of each step's stable period to average
+                      V over. If None, uses full stable period [ramp_end, stable_end].
         debug: If True, enable debug logging throughout the player pipeline.
         debug_log: Optional existing DebugLog to share (used internally by
                    StreamingTDGLPlayer to avoid creating a second instance).
@@ -660,7 +666,7 @@ def create_player(
     mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"], **s3_kwds)
     iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, debug_log=debug_log, **s3_kwds)
     if timing_steps is not None:
-        iv_cache.set_timing_steps(timing_steps)
+        iv_cache.set_timing_steps(timing_steps, average_time=average_time)
     iv_cache.ensure(0)
     iv_cache.start()
     player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, debug_log=debug_log, **s3_kwds)
@@ -672,7 +678,8 @@ def create_player(
 def watch_run(
     store, run_id: str, poll_interval: int = 15, argo_host: str | None = None,
     timing_params: dict | None = None, solver_options: dict | None = None,
-    playback_dt: float = 1.0, debug: bool = False,
+    playback_dt: float = 1.0, average_time: float | None = None,
+    debug: bool = False,
 ) -> StreamingTDGLPlayer:
     """Create a streaming player that watches a running simulation in MinIO.
 
@@ -685,6 +692,7 @@ def watch_run(
         timing_params=timing_params,
         solver_options=solver_options,
         playback_dt=playback_dt,
+        average_time=average_time,
         debug=debug,
     )
 

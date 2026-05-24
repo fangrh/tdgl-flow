@@ -152,20 +152,30 @@ class IVCache:
         with self.lock:
             return len(self.I)
 
-    def set_timing_steps(self, steps):
-        """Set timing step boundaries for Je-step-averaged I-V."""
+    def set_timing_steps(self, steps, average_time=None):
+        """Set timing step boundaries and averaging window for Je-step-averaged I-V.
+
+        Args:
+            steps: List of step dicts from build_timing(), each with
+                   ramp_start, ramp_end, stable_end.
+            average_time: Duration at the end of each step's stable period to
+                          average V over. If None, uses the full stable period
+                          [ramp_end, stable_end].
+        """
         self._timing_steps = steps
+        self._average_time = average_time
 
     def step_averaged_iv(self, current_frame_idx=None):
         """Return I-V data averaged per completed Je step.
 
-        Groups frames by full step period [ramp_start, stable_end) then
-        averages V over the stable period [ramp_end, stable_end] when
-        frames exist there, falling back to all frames in the step.
+        Groups frames by full step period [ramp_start, stable_end) to determine
+        completeness. Averages V over the last average_time of each step's stable
+        period: [stable_end - average_time, stable_end]. If average_time is not
+        set, uses the full stable period [ramp_end, stable_end].
 
-        A step is complete when its last frame time >= ramp_end (stable
-        period has started).  When no timing steps are set, falls back
-        to raw frame-by-frame data up to current_frame_idx.
+        A step is complete when its last frame time >= avg_start. When no timing
+        steps are set, falls back to raw frame-by-frame data up to
+        current_frame_idx.
 
         Returns:
             (I_arr, V_arr, n_completed_steps, total_steps)
@@ -194,19 +204,26 @@ class IVCache:
             ramp_end = step["ramp_end"]
             stable_end = step["stable_end"]
 
-            # Group by full step period — much wider than save_time window
+            # Group by full step period to find all frames
             indices = [i for i, t in enumerate(t_all) if ramp_start <= t < stable_end]
             if not indices:
                 continue
 
-            # Step is complete when we have frames into the stable period
+            # Compute averaging window
+            if self._average_time is not None:
+                avg_start = stable_end - self._average_time
+            else:
+                avg_start = ramp_end
+
+            # Step is complete when we have frames into the averaging window
             last_t = t_all[indices[-1]]
-            if last_t < ramp_end:
+            if last_t < avg_start:
                 continue
 
-            # Prefer averaging over stable period; fall back to all step frames
-            stable_idx = [i for i in indices if t_all[i] >= ramp_end]
-            use_idx = stable_idx if stable_idx else indices
+            # Average V over [avg_start, stable_end]
+            use_idx = [i for i in indices if t_all[i] >= avg_start]
+            if not use_idx:
+                use_idx = [i for i in indices if t_all[i] >= ramp_end]
 
             step_V = [V_all[i] for i in use_idx]
             step_I = [I_all[i] for i in use_idx]

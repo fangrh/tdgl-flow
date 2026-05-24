@@ -19,33 +19,6 @@ from botocore.config import Config as BotoConfig
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
 
-class SaveWindowTimeline:
-    def __init__(self) -> None:
-        self.offset = 0.0
-
-    def map_physical(self, *, save_start: float, physical_time: float) -> float:
-        return self.offset + max(0.0, physical_time - save_start)
-
-    def finish_window(self, *, save_time: float) -> None:
-        self.offset += save_time
-
-
-def _group_solution_indices_by_save_window(times: np.ndarray, steps: list[dict]) -> list[list[int]]:
-    grouped = []
-    for step in steps:
-        indices = [
-            int(i)
-            for i, time_value in enumerate(times)
-            if step["save_start"] <= float(time_value) <= step["save_end"]
-        ]
-        if not indices:
-            raise RuntimeError(
-                f"No saved frames found in save window [{step['save_start']}, {step['save_end']}]"
-            )
-        grouped.append(indices)
-    return grouped
-
-
 def _get_minio_client():
     return boto3.client(
         "s3",

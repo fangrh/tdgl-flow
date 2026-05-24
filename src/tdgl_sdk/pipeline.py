@@ -196,6 +196,7 @@ class SimulationPipeline:
         timing_params: dict | None = None,
         solver_options: dict | None = None,
         playback_dt: float = 1.0,
+        average_time: float | None = None,
         debug: bool = False,
     ):
         """Create a streaming viewer for a running simulation.
@@ -203,6 +204,7 @@ class SimulationPipeline:
         The viewer polls MinIO for new frames and auto-updates.
         Pass timing_params + solver_options to pre-allocate the progress bar.
         playback_dt: simulation time per animation step (default 1.0).
+        average_time: duration at end of each step's stable period to average V over.
         debug: enable debug output (default False).
         Returns a StreamingTDGLPlayer (call .display_player() in Jupyter).
         """
@@ -214,6 +216,7 @@ class SimulationPipeline:
             timing_params=timing_params,
             solver_options=solver_options,
             playback_dt=playback_dt,
+            average_time=average_time,
             debug=debug,
         )
 
