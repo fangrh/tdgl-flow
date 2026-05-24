@@ -35,7 +35,7 @@ def compute_time_grid(solve_time: float, playback_dt: float = 1.0):
 
 
 class RealtimeTDGLWidgetPlayer:
-    def __init__(self, h5_path, mesh, iv_cache, mu_vmax, **s3_kwds):
+    def __init__(self, h5_path, mesh, iv_cache, mu_vmax, debug_log=None, **s3_kwds):
         if widgets is None:
             raise ImportError("ipywidgets is required for the widget player")
 
@@ -44,6 +44,7 @@ class RealtimeTDGLWidgetPlayer:
         self.iv_cache = iv_cache
         self.mu_vmax = mu_vmax
         self._s3_kwds = s3_kwds
+        self._debug = debug_log
         self.total = mesh["total_frames"]  # actual frames in HDF5
         self.current = 0  # current position in time_grid
         self.playing = False
@@ -141,6 +142,10 @@ class RealtimeTDGLWidgetPlayer:
         frame_info = f" frame {frame_idx}" if frame_idx >= 0 else " (waiting)"
         return f"t={t:.3f} / {t_end:.3f} s{frame_info}"
 
+    @property
+    def debug_log(self):
+        return self._debug
+
     def _find_frame_for_time(self, target_time):
         """Find the best available frame for a target simulation time.
 
@@ -162,7 +167,7 @@ class RealtimeTDGLWidgetPlayer:
     def _render(self, idx):
         return render_frame_png(
             self.h5_path, self._mesh, self.iv_cache, self.mu_vmax, idx,
-            **self._s3_kwds
+            debug_log=self._debug, **self._s3_kwds
         )
 
     def display_player(self):
@@ -215,6 +220,9 @@ class RealtimeTDGLWidgetPlayer:
                 frame_idx = max(0, self.total - 1)
 
         frame_idx = min(frame_idx, self.total - 1)
+        if self._debug:
+            self._debug.log("show", step=step, frame=frame_idx,
+                           total_frames=self.total, playing=self.playing)
         with self.render_lock:
             self.current = step
             png = self.buffer.get(frame_idx, self._render)
@@ -270,6 +278,9 @@ class RealtimeTDGLWidgetPlayer:
 
     def _loop(self):
         while not self.stop_event.is_set():
+            if self._debug:
+                self._debug.log("loop_tick", current=self.current,
+                               max_step=len(self.time_grid)-1)
             next_step = self.current + 1
 
             if next_step >= len(self.time_grid):
@@ -438,7 +449,7 @@ class StreamingTDGLPlayer:
     """
 
     def __init__(self, store, run_id, poll_interval=15, argo_host=None,
-                 timing_params=None, solver_options=None, playback_dt=1.0):
+                 timing_params=None, solver_options=None, playback_dt=1.0, debug=False):
         if widgets is None:
             raise ImportError("ipywidgets is required")
 
@@ -453,6 +464,9 @@ class StreamingTDGLPlayer:
         self._timing_params = timing_params
         self._solver_options = solver_options or {}
         self._playback_dt = playback_dt
+        self._debug_flag = debug
+        from tdgl_sdk.viewer._debug import DebugLog
+        self._debug = DebugLog() if debug else None
         self._s3_kwds = {
             "s3_access_key": store.s3._request_signer._credentials.access_key,
             "s3_secret_key": store.s3._request_signer._credentials.secret_key,
@@ -479,6 +493,10 @@ class StreamingTDGLPlayer:
             return result.get("steps", [])
         except Exception:
             return None
+
+    @property
+    def debug_log(self):
+        return self._debug if self._debug else (self._player.debug_log if self._player else None)
 
     def display_player(self):
         display(self.ui)
@@ -514,6 +532,9 @@ class StreamingTDGLPlayer:
                             n_frames = len(f["data"].keys()) if "data" in f else 0
                     except Exception:
                         n_frames = 0
+
+                    if self._debug:
+                        self._debug.log("poll_frames", status=status, n_frames=n_frames, solve_time=solve_time)
 
                     if n_frames == 0:
                         self.status_label.value = f"{status} — waiting for HDF5..."
@@ -578,6 +599,7 @@ class StreamingTDGLPlayer:
             self._h5_url, live=(status == "running"),
             playback_dt=self._playback_dt,
             timing_steps=timing_steps,
+            debug=self._debug_flag,
             **self._s3_kwds,
         )
 
@@ -613,6 +635,7 @@ def create_player(
     live: bool = False,
     playback_dt: float = 1.0,
     timing_steps: list | None = None,
+    debug: bool = False,
     **s3_kwds,
 ) -> RealtimeTDGLWidgetPlayer:
     """Create a widget player for an HDF5 file.
@@ -623,16 +646,19 @@ def create_player(
         playback_dt: Simulation time per animation step (default 1.0).
         timing_steps: Optional list of step dicts from build_timing() for
                       step-averaged I-V curve.
+        debug: If True, enable debug logging throughout the player pipeline.
         **s3_kwds: S3 credentials for ROS3 driver (s3_access_key, s3_secret_key).
     """
+    from tdgl_sdk.viewer._debug import DebugLog
+    debug_log = DebugLog() if debug else None
     mesh = load_mesh(h5_path, **s3_kwds)
     mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"], **s3_kwds)
-    iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, **s3_kwds)
+    iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, debug_log=debug_log, **s3_kwds)
     if timing_steps is not None:
         iv_cache.set_timing_steps(timing_steps)
     iv_cache.ensure(0)
     iv_cache.start()
-    player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, **s3_kwds)
+    player = RealtimeTDGLWidgetPlayer(h5_path, mesh, iv_cache, mu_vmax, debug_log=debug_log, **s3_kwds)
     player.live = live
     player.playback_dt = playback_dt
     return player
@@ -641,7 +667,7 @@ def create_player(
 def watch_run(
     store, run_id: str, poll_interval: int = 15, argo_host: str | None = None,
     timing_params: dict | None = None, solver_options: dict | None = None,
-    playback_dt: float = 1.0,
+    playback_dt: float = 1.0, debug: bool = False,
 ) -> StreamingTDGLPlayer:
     """Create a streaming player that watches a running simulation in MinIO.
 
@@ -654,6 +680,7 @@ def watch_run(
         timing_params=timing_params,
         solver_options=solver_options,
         playback_dt=playback_dt,
+        debug=debug,
     )
 
 
