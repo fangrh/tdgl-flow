@@ -1,5 +1,5 @@
 #%%
-"""Browse completed TDGL simulation runs and display one.
+"""Browse completed TDGL simulation runs with 2x2 player (psi, mu, V-vs-t, I-V).
 
 Run cell-by-cell in VS Code Interactive or Jupyter.
 
@@ -61,11 +61,11 @@ print(f"  Timing: {selected.get('timing_params')}")
 print(f"  Solver: {selected.get('solver_options')}")
 
 #%%
-# ── Step 3: Display player ──────────────────────────────────────────────
+# ── Step 3: Display 2x2 player ──────────────────────────────────────────
 # Reads HDF5 directly from MinIO via ROS3 — no local download.
 # Uses timing_steps from manifest for step-averaged I-V (smooth curve).
 from tdgl_sdk.viewer._iv import load_timing_steps_from_solution
-from tdgl_sdk.viewer._player import create_player
+from tdgl_sdk.viewer._player_2x2 import create_player_2x2
 
 h5_url = store.h5_url(run_id)
 s3_kwds = {
@@ -87,7 +87,7 @@ if timing_steps is None:
 if not timing_steps:
     timing_steps = load_timing_steps_from_solution(h5_url, **s3_kwds)
 
-player = create_player(h5_url, timing_steps=timing_steps, average_time=50.0, debug=True, **s3_kwds)
+player = create_player_2x2(h5_url, timing_steps=timing_steps, average_time=50.0, debug=True, **s3_kwds)
 print(f"Player: {player.total} frames, timing_steps: {len(timing_steps) if timing_steps else 0}")
 player.display_player()
 

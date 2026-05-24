@@ -168,7 +168,7 @@ import base64
 from tdgl_workflow.timing import build_timing
 
 _timing = build_timing(**TIMING_PARAMS)
-player = create_player(h5_url, timing_steps=_timing.get("steps", []), average_time=AVERAGE_TIME, debug=True, **s3_kwds)
+player = create_player(h5_url, timing_steps=_timing.get("steps", []) + _timing.get("ramp_down_steps", []), average_time=AVERAGE_TIME, debug=True, **s3_kwds)
 print(f"Player: {player.total} frames")
 
 def show_frame(idx):

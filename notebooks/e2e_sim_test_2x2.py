@@ -46,7 +46,7 @@ TIMING_PARAMS = {
     "je_step": 0.2,
     "ramp_time": 100.0,
     "stable_time": 200.0,
-    "ramp_down": False,
+    "ramp_down": True,
 }
 
 # I-V averaging: average V over the last average_time of each step's stable period.
@@ -168,7 +168,7 @@ import base64
 from tdgl_workflow.timing import build_timing
 
 _timing = build_timing(**TIMING_PARAMS)
-player = create_player_2x2(h5_url, timing_steps=_timing.get("steps", []), average_time=AVERAGE_TIME, debug=True, **s3_kwds)
+player = create_player_2x2(h5_url, timing_steps=_timing.get("steps", []) + _timing.get("ramp_down_steps", []), average_time=AVERAGE_TIME, debug=True, **s3_kwds)
 print(f"Player: {player.total} frames")
 
 def show_frame(idx):

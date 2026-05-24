@@ -503,7 +503,9 @@ class StreamingTDGLPlayer:
         try:
             from tdgl_workflow.timing import build_timing
             result = build_timing(**self._timing_params)
-            return result.get("steps", [])
+            steps = result.get("steps", [])
+            steps += result.get("ramp_down_steps", [])
+            return steps if steps else None
         except Exception:
             return None
 
