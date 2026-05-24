@@ -600,6 +600,7 @@ class StreamingTDGLPlayer:
             playback_dt=self._playback_dt,
             timing_steps=timing_steps,
             debug=self._debug_flag,
+            debug_log=self._debug,
             **self._s3_kwds,
         )
 
@@ -636,6 +637,7 @@ def create_player(
     playback_dt: float = 1.0,
     timing_steps: list | None = None,
     debug: bool = False,
+    debug_log=None,
     **s3_kwds,
 ) -> RealtimeTDGLWidgetPlayer:
     """Create a widget player for an HDF5 file.
@@ -647,10 +649,13 @@ def create_player(
         timing_steps: Optional list of step dicts from build_timing() for
                       step-averaged I-V curve.
         debug: If True, enable debug logging throughout the player pipeline.
+        debug_log: Optional existing DebugLog to share (used internally by
+                   StreamingTDGLPlayer to avoid creating a second instance).
         **s3_kwds: S3 credentials for ROS3 driver (s3_access_key, s3_secret_key).
     """
     from tdgl_sdk.viewer._debug import DebugLog
-    debug_log = DebugLog() if debug else None
+    if debug_log is None and debug:
+        debug_log = DebugLog()
     mesh = load_mesh(h5_path, **s3_kwds)
     mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"], **s3_kwds)
     iv_cache = IVCache(h5_path, mesh, poll_interval=1.0, batch_size=128, debug_log=debug_log, **s3_kwds)
