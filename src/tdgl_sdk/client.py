@@ -94,6 +94,16 @@ class TDGLRunStore:
             for obj in page.get("Contents", []):
                 self.s3.delete_object(Bucket=self.bucket, Key=obj["Key"])
 
+    def clear_all_runs(self) -> int:
+        """Delete all simulation data from the bucket. Returns count of deleted objects."""
+        deleted = 0
+        paginator = self.s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix="tdgl-runs/"):
+            for obj in page.get("Contents", []):
+                self.s3.delete_object(Bucket=self.bucket, Key=obj["Key"])
+                deleted += 1
+        return deleted
+
     def h5_url(self, run_id: str) -> str:
         """Return the MinIO URL for a run's HDF5 file (for ROS3 direct read)."""
         return f"{self.endpoint_url}/{self.bucket}/tdgl-runs/{run_id}/output.h5"
