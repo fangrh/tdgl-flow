@@ -15,12 +15,12 @@ End-to-end TDGL simulation: build device → run py-tdgl → store in MinIO → 
 | `clusters/argocd/` | Argo CD app definitions |
 ## Dev
 
-1. **本地验证** — 改完代码跑 notebook：
+1. **本地验证** — 逻辑清晰、输入输出数据结构明确，本地 notebook 跑通即可直接 CI/CD：
    ```bash
    pip install -e ".[dev]"
-   python notebooks/e2e_sim_test.py   # 或 Jupyter 逐 cell 跑
+   python notebooks/e2e_sim_test.py
    ```
-2. **需要时手动构建镜像 + 提交 workflow**（仅涉及 K8s 相关改动时）：
+2. **K8s 验证**（仅确有必要时） — 涉及集群环境、资源调度等无法本地验证的改动：
    ```bash
    docker build -f services/py-tdgl-runner/Dockerfile -t ghcr.io/fangrh/py-tdgl-runner:dev .
    docker push ghcr.io/fangrh/py-tdgl-runner:dev
