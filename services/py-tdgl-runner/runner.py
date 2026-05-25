@@ -15,6 +15,7 @@ import boto3
 import numpy as np
 import tdgl
 from botocore.config import Config as BotoConfig
+from tdgl_workflow.epsilon import make_gaussian_epsilon
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
@@ -87,6 +88,18 @@ def main() -> None:
     bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
     now = datetime.now(timezone.utc).isoformat()
 
+    epsilon_params_raw = os.environ.get("EPSILON_PARAMS", "{}")
+    epsilon_params = json.loads(epsilon_params_raw)
+
+    epsilon_fn = None
+    if epsilon_params.get("type") == "gaussian":
+        epsilon_fn = make_gaussian_epsilon(
+            positions=epsilon_params["positions"],
+            widths=epsilon_params["widths"],
+            strengths=epsilon_params["strengths"],
+        )
+        print(f"Epsilon: Gaussian array, {len(epsilon_params['positions'])} spots")
+
     with open(os.path.join(DATA_DIR, "device.pkl"), "rb") as f:
         device = pickle.load(f)
 
@@ -153,11 +166,14 @@ def main() -> None:
     upload_thread.start()
 
     try:
-        solution = tdgl.solve(
-            device,
-            options,
+        solve_kwargs = dict(
+            device=device,
+            options=options,
             terminal_currents=get_terminal_currents,
         )
+        if epsilon_fn is not None:
+            solve_kwargs["disorder_epsilon"] = epsilon_fn
+        solution = tdgl.solve(**solve_kwargs)
 
         # Stop periodic upload, do final upload
         upload_stop.set()
