@@ -18,9 +18,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from tdgl_sdk import SimulationPipeline, verify_run, examine_h5, format_report, create_player_2x2
+from tdgl_workflow.epsilon import make_gaussian_epsilon
 
 print("Imports OK")
 
@@ -49,30 +51,116 @@ TIMING_PARAMS = {
     "ramp_down": True,
 }
 
-# ── Epsilon: Gaussian spot array ────────────────────────────────────────
-# Optional: spatially-varying disorder_epsilon from Gaussian light spots.
-# Set to None to disable. epsilon = clamp(1 - sum(T_i), 0, 1)
-EPSILON_PARAMS = {
-    "type": "gaussian",
-    "positions": [[-1.0, 0.0], [1.0, 0.0]],
-    "widths": [[0.5, 0.5], [0.5, 0.5]],
-    "strengths": [0.3, 0.3],
-}
-
-# I-V averaging: average V over the last average_time of each step's stable period.
-AVERAGE_TIME = 50.0
-
 SOLVER_OPTIONS = {
     "dt_init": 1e-4,
     "dt_max": 0.1,
     "save_every": 50,
 }
 
+AVERAGE_TIME = 50.0
+
 print("Config ready")
 print(f"  Device: {DEVICE_PARAMS['film_width']}x{DEVICE_PARAMS['film_height']}")
 print(f"  Timing: Je {TIMING_PARAMS['je_initial']}->{TIMING_PARAMS['je_final']}, step={TIMING_PARAMS['je_step']}")
 print(f"  Solver: save_every={SOLVER_OPTIONS['save_every']}")
-print(f"  Epsilon: {len(EPSILON_PARAMS['positions']) if EPSILON_PARAMS else 'disabled'} spots")
+
+#%%
+# ── Epsilon: Gaussian spot array ────────────────────────────────────────
+# Configure a spatially-varying disorder_epsilon from Gaussian light spots.
+# Set EPSILON_PARAMS = None to disable (no epsilon).
+#
+# Each spot: position [x, y], width [sigma_x, sigma_y], strength (peak T suppression)
+# Formula: T = sum(strengths[i] * exp(-dx²/(2*sx²) - dy²/(2*sy²)))
+#          epsilon = clamp(1 - T, 0, 1)
+
+# ── Example: 3x3 circular spot array ────────────────────────────────────
+# Uncomment one of the examples below, or define your own.
+
+# --- 3x3 circular grid ---
+_xs = np.linspace(-2.0, 2.0, 3)
+_ys = np.linspace(-1.2, 1.2, 3)
+_positions = [[float(x), float(y)] for y in _ys for x in _xs]
+EPSILON_PARAMS = {
+    "type": "gaussian",
+    "positions": _positions,
+    "widths": [[0.3, 0.3]] * 9,      # circular spots
+    "strengths": [0.4] * 9,
+}
+
+# --- 2 elliptical spots (original) ---
+# EPSILON_PARAMS = {
+#     "type": "gaussian",
+#     "positions": [[-1.0, 0.0], [1.0, 0.0]],
+#     "widths": [[0.5, 0.3], [0.5, 0.3]],
+#     "strengths": [0.5, 0.5],
+# }
+
+# --- Disable epsilon ---
+# EPSILON_PARAMS = None
+
+n_spots = len(EPSILON_PARAMS["positions"]) if EPSILON_PARAMS else 0
+print(f"  Epsilon: {n_spots} spots" + ("" if not EPSILON_PARAMS else f" (type={EPSILON_PARAMS['type']})"))
+
+#%%
+# ── Preview: T and epsilon distribution ─────────────────────────────────
+# Plot the temperature suppression and epsilon before running the simulation.
+# Only runs if EPSILON_PARAMS is set.
+
+if EPSILON_PARAMS is not None:
+    epsilon_fn = make_gaussian_epsilon(
+        positions=EPSILON_PARAMS["positions"],
+        widths=EPSILON_PARAMS["widths"],
+        strengths=EPSILON_PARAMS["strengths"],
+    )
+
+    fw = DEVICE_PARAMS["film_width"]
+    fh = DEVICE_PARAMS["film_height"]
+    nx, ny = 300, 200
+    x = np.linspace(-fw / 2, fw / 2, nx)
+    y = np.linspace(-fh / 2, fh / 2, ny)
+    X, Y = np.meshgrid(x, y)
+
+    T_map = np.zeros((ny, nx))
+    for j in range(ny):
+        for i in range(nx):
+            T_map[j, i] = 1.0 - epsilon_fn((x[i], y[j]))
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 4.5))
+
+    # T distribution
+    ax0 = axes[0]
+    im0 = ax0.pcolormesh(X, Y, T_map, shading="auto", cmap="hot")
+    ax0.set_title("T (temperature suppression)")
+    ax0.set_xlabel("x"); ax0.set_ylabel("y"); ax0.set_aspect("equal")
+    fig.colorbar(im0, ax=ax0, label="T")
+    for p in EPSILON_PARAMS["positions"]:
+        ax0.plot(p[0], p[1], "c+", ms=10, mew=2)
+
+    # Epsilon distribution
+    ax1 = axes[1]
+    im1 = ax1.pcolormesh(X, Y, 1 - T_map, shading="auto", cmap="viridis", vmin=0, vmax=1)
+    ax1.set_title("epsilon = 1 - T")
+    ax1.set_xlabel("x"); ax1.set_ylabel("y"); ax1.set_aspect("equal")
+    fig.colorbar(im1, ax=ax1, label="epsilon")
+    for p in EPSILON_PARAMS["positions"]:
+        ax1.plot(p[0], p[1], "r+", ms=10, mew=2)
+
+    # Cross-section at y=0
+    ax2 = axes[2]
+    mid_y = ny // 2
+    ax2.plot(x, T_map[mid_y, :], "r-", linewidth=1.5, label="T")
+    ax2.plot(x, 1 - T_map[mid_y, :], "b-", linewidth=1.5, label="epsilon")
+    ax2.set_title("Cross-section at y=0")
+    ax2.set_xlabel("x"); ax2.legend(); ax2.grid(True, alpha=0.3)
+    ax2.set_ylim(-0.05, 1.05)
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"T range:      [{T_map.min():.4f}, {T_map.max():.4f}]")
+    print(f"epsilon range: [{(1 - T_map).min():.4f}, {(1 - T_map).max():.4f}]")
+else:
+    print("Epsilon disabled (EPSILON_PARAMS = None)")
 
 #%%
 # ── Step 0: Clear MinIO (optional) ───────────────────────────────────────
@@ -211,8 +299,6 @@ iv = player.get_iv_data(step_averaged=True)
 print(f"I-V points (Je steps): {iv['n_points']}")
 print(f"I range: [{iv['I_range'][0]:.4f}, {iv['I_range'][1]:.4f}]")
 print(f"V range: [{iv['V_range'][0]:.4f}, {iv['V_range'][1]:.4f}]")
-
-import matplotlib.pyplot as plt
 
 fig, ax = plt.subplots(1, 1, figsize=(6, 4))
 ax.plot(iv["I"], iv["V"], "r-", linewidth=1)
