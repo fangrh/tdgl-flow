@@ -3,6 +3,7 @@ pub mod minio;
 pub mod run_info;
 pub mod frame_reader;
 pub mod iv;
+pub mod buffer;
 
 use pyo3::prelude::*;
 use minio::MinioClient;
