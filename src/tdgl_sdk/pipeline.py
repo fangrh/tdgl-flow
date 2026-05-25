@@ -38,6 +38,7 @@ class SimulationPipeline:
         device_params: dict,
         timing_params: dict,
         solver_options: dict | None = None,
+        epsilon_params: dict | None = None,
     ) -> tuple[str, str]:
         """Submit a py-tdgl-sim workflow. Returns (run_id, wf_name)."""
         from hera.workflows import Workflow, Parameter
@@ -57,6 +58,7 @@ class SimulationPipeline:
                 Parameter(name="device-params-json", value=json.dumps(device_params)),
                 Parameter(name="timing-params-json", value=json.dumps(timing_params)),
                 Parameter(name="solver-options-json", value=json.dumps(solver_options or {})),
+                Parameter(name="epsilon-params-json", value=json.dumps(epsilon_params or {})),
             ],
             workflows_service=self._argo_service(),
         )
@@ -145,6 +147,7 @@ class SimulationPipeline:
         device_params: dict,
         timing_params: dict,
         solver_options: dict | None = None,
+        epsilon_params: dict | None = None,
         poll_timeout: int = 600,
     ) -> dict:
         """Full pipeline: submit -> poll -> download -> verify.
@@ -156,6 +159,7 @@ class SimulationPipeline:
             device_params=device_params,
             timing_params=timing_params,
             solver_options=solver_options,
+            epsilon_params=epsilon_params,
         )
         print(f"  Run ID: {run_id}, Workflow: {wf_name}")
 
