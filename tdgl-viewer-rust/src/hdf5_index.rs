@@ -509,6 +509,40 @@ pub fn build_index_from_file(path: &Path) -> Result<H5Index, String> {
     build_index_from_bytes(&data)
 }
 
+/// Build an H5Index by downloading the file from MinIO and scanning it.
+///
+/// For the MVP, this downloads the entire H5 file to a temporary cache location.
+/// The HDF5 parser requires the full file for its scan-based approach.
+pub fn build_index(client: &crate::minio::MinioClient, run_id: &str) -> Result<H5Index, String> {
+    use std::env;
+
+    let key = client.h5_key(run_id);
+    let url = format!("{}/{}", client.endpoint(), key);
+
+    // For now, download the entire file to a temp location
+    // The HDF5 parser needs the full file for scan-based approach
+    let temp_dir = env::temp_dir();
+    let cache_path = temp_dir.join(format!("tdgl_h5_{}.cache", run_id));
+
+    if cache_path.exists() {
+        // Use cached file
+        return build_index_from_file(&cache_path);
+    }
+
+    // Download full file
+    let resp = reqwest::blocking::Client::new()
+        .get(&url)
+        .send()
+        .map_err(|e| format!("Failed to download H5 file: {}", e))?;
+
+    let bytes = resp.bytes().map_err(|e| format!("Failed to read response: {}", e))?;
+
+    fs::write(&cache_path, &bytes)
+        .map_err(|e| format!("Failed to write cache file: {}", e))?;
+
+    build_index_from_file(&cache_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

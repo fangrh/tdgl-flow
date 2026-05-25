@@ -1,6 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RunInfo {
     pub run_id: String,
     pub status: String,
@@ -14,7 +14,7 @@ pub struct RunInfo {
     pub solver_options: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeviceParams {
     pub film_width: Option<f64>,
     pub film_height: Option<f64>,
@@ -24,14 +24,14 @@ pub struct DeviceParams {
     pub smooth: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TimingSummary {
     pub mode: Option<String>,
     pub n_steps: Option<u64>,
     pub solve_time: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TimingStep {
     pub ramp_start: f64,
     pub ramp_end: f64,

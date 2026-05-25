@@ -76,6 +76,10 @@ impl MinioClient {
     pub fn h5_key(&self, run_id: &str) -> String {
         format!("tdgl-runs/{}/output.h5", run_id)
     }
+
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
 }
 
 fn extract_prefixes(xml: &str) -> Vec<String> {
