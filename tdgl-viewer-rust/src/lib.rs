@@ -62,8 +62,6 @@ impl TdglViewer {
         self.buffer.clear();
         let run = &self.runs[idx];
 
-        // Try to get a local file path for faster indexing if the H5 is available locally
-        // Otherwise use HTTP range requests
         self.index = Some(hdf5_index::build_index(&self.client, &run.run_id)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?);
         Ok(())
@@ -106,6 +104,12 @@ impl TdglViewer {
     fn set_mu_vmax(&mut self, vmax: f64) {
         self.mu_vmax = vmax;
         self.buffer.clear();
+    }
+
+    /// Clear cached index for a specific run, or all runs if run_id is None.
+    #[pyo3(signature = (run_id=None))]
+    fn clear_cache(&self, run_id: Option<&str>) {
+        hdf5_index::clear_index_cache(run_id);
     }
 }
 
