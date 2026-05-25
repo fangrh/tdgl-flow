@@ -23,7 +23,11 @@ impl MinioClient {
         let prefixes = extract_prefixes(&body);
         let mut runs = Vec::new();
         for prefix in prefixes {
-            if let Some(run) = self.get_manifest_by_prefix(&prefix)? {
+            // Extract run_id from prefix like "tdgl-runs/abc-123/"
+            let run_id = prefix.trim_end_matches('/')
+                .trim_start_matches("tdgl-runs/")
+                .to_string();
+            if let Some(run) = self.get_manifest(&run_id)? {
                 runs.push(run);
             }
         }
@@ -43,27 +47,8 @@ impl MinioClient {
         Ok(Some(run))
     }
 
-    fn get_manifest_by_prefix(&self, prefix: &str) -> Result<Option<RunInfo>, String> {
-        let url = format!("{}/{}?prefix={}&suffix=manifest.json&list-type=2",
-            self.endpoint, self.bucket, prefix);
-        let resp = self.client.get(&url).send().map_err(|e| e.to_string())?;
-        let body = resp.text().map_err(|e| e.to_string())?;
-        if let Some(key) = extract_manifest_key(&body) {
-            let url = format!("{}/{}", self.endpoint, key);
-            let resp = self.client.get(&url).send().map_err(|e| e.to_string())?;
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                return Ok(None);
-            }
-            let body = resp.text().map_err(|e| e.to_string())?;
-            let run: RunInfo = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-            Ok(Some(run))
-        } else {
-            Ok(None)
-        }
-    }
-
     pub fn read_range(&self, key: &str, offset: u64, length: u64) -> Result<Vec<u8>, String> {
-        let url = format!("{}/{}", self.endpoint, key);
+        let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
         let range = format!("bytes={}-{}", offset, offset + length - 1);
         let resp = self.client.get(&url)
             .header("Range", &range)
@@ -79,6 +64,10 @@ impl MinioClient {
 
     pub fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    pub fn bucket(&self) -> &str {
+        &self.bucket
     }
 }
 

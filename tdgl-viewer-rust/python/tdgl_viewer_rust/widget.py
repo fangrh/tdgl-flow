@@ -71,13 +71,13 @@ class TdglViewer:
         # Render first frame
         if total > 0:
             png = self._rust.render_frame(0)
-            image.value = bytes(png)
+            image.value = png
             time_label.value = f"frame 0 / {total - 1}"
 
         def _render(idx):
             idx = max(0, min(idx, self._rust.total_frames() - 1))
             png = self._rust.render_frame(idx)
-            image.value = bytes(png)
+            image.value = png
             slider.value = idx
             time_label.value = f"frame {idx} / {self._rust.total_frames() - 1}"
             status.value = f"frame {idx}/{self._rust.total_frames() - 1}"
@@ -145,7 +145,7 @@ class TdglViewer:
                 break
             t0 = time.perf_counter()
             png = self._rust.render_frame(next_frame)
-            image.value = bytes(png)
+            image.value = png
             slider.value = next_frame
             elapsed = time.perf_counter() - t0
             interval = 1.0 / self._fps

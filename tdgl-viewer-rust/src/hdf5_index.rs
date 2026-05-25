@@ -517,7 +517,7 @@ pub fn build_index(client: &crate::minio::MinioClient, run_id: &str) -> Result<H
     use std::env;
 
     let key = client.h5_key(run_id);
-    let url = format!("{}/{}", client.endpoint(), key);
+    let url = format!("{}/{}/{}", client.endpoint(), client.bucket(), key);
 
     // For now, download the entire file to a temp location
     // The HDF5 parser needs the full file for scan-based approach

@@ -8,6 +8,7 @@ mod iv;
 mod colormaps;
 
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use minio::MinioClient;
 use hdf5_index::H5Index;
 use buffer::FrameBuffer;
@@ -68,10 +69,10 @@ impl TdglViewer {
         Ok(())
     }
 
-    fn render_frame(&mut self, frame_idx: usize) -> PyResult<Vec<u8>> {
+    fn render_frame<'py>(&mut self, py: Python<'py>, frame_idx: usize) -> PyResult<Bound<'py, PyBytes>> {
         // Check buffer first
         if let Some(png) = self.buffer.get(frame_idx) {
-            return Ok(png);
+            return Ok(PyBytes::new_bound(py, &png));
         }
         let index = self.index.as_ref()
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
@@ -84,7 +85,7 @@ impl TdglViewer {
         let psi_abs: Vec<f64> = psi.iter().map(|[re, im]| (re*re + im*im).sqrt()).collect();
         let png = renderer::render_frame_2x2(&psi_abs, &mu, self.mu_vmax, frame_idx, index.total_frames);
         self.buffer.insert(frame_idx, png.clone());
-        Ok(png)
+        Ok(PyBytes::new_bound(py, &png))
     }
 
     fn total_frames(&self) -> PyResult<usize> {
