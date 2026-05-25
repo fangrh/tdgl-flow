@@ -19,17 +19,21 @@ def make_gaussian_epsilon(
         Callable epsilon(r) where r is (x, y) tuple.
         epsilon = clamp(1 - sum(T_i), 0, 1)
     """
-    pos = np.asarray(positions, dtype=np.float64)
-    w = np.asarray(widths, dtype=np.float64)
+    if len(positions) != len(widths) or len(positions) != len(strengths):
+        raise ValueError("positions, widths, and strengths must have same length")
+    pos = np.asarray(positions, dtype=np.float64).reshape(-1, 2)
+    w = np.asarray(widths, dtype=np.float64).reshape(-1, 2)
     s = np.asarray(strengths, dtype=np.float64)
+    if len(pos) > 0 and np.any(w <= 0):
+        raise ValueError("widths must be positive")
 
-    def epsilon(r):
+    def epsilon(r: tuple[float, float]) -> float:
         x, y = r
         dx = x - pos[:, 0]
         dy = y - pos[:, 1]
         sx2 = w[:, 0] ** 2
         sy2 = w[:, 1] ** 2
         T = float(np.sum(s * np.exp(-dx**2 / (2 * sx2) - dy**2 / (2 * sy2))))
-        return max(0.0, 1.0 - T)
+        return float(np.clip(1.0 - T, 0.0, 1.0))
 
     return epsilon
