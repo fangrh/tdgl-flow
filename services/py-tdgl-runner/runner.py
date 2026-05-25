@@ -11,6 +11,8 @@ import sys
 import threading
 from datetime import datetime, timezone
 
+sys.path.insert(0, "/app/vendor")
+
 import boto3
 import numpy as np
 import tdgl
