@@ -1,3 +1,3 @@
-from tdgl_viewer_rust.tdgl_viewer_rust import TdglViewer
+from tdgl_viewer_rust.widget import TdglViewer
 
 __all__ = ["TdglViewer"]
