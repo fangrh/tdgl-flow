@@ -28,6 +28,24 @@ class TdglViewer:
     def open(self, run_id=None, run_index=None):
         self._rust.open(run_id=run_id, run_index=run_index)
 
+    def total_frames(self):
+        return self._rust.total_frames()
+
+    def render_frame(self, frame_idx):
+        return self._rust.render_frame(frame_idx)
+
+    def start_iv_scan(self, average_time=None):
+        self._rust.start_iv_scan(average_time=average_time)
+
+    def stop_iv_scan(self):
+        self._rust.stop_iv_scan()
+
+    def get_iv_progress(self):
+        return json.loads(self._rust.get_iv_progress())
+
+    def get_timing_steps(self):
+        return json.loads(self._rust.get_timing_steps())
+
     def display(self):
         """Display interactive viewer in Jupyter."""
         runs = self._rust.list_runs()
@@ -61,7 +79,8 @@ class TdglViewer:
         fps_slider = widgets.IntSlider(
             value=10, min=1, max=30, description="FPS",
             continuous_update=False,
-            layout=widgets.Layout(width="180px")),
+            layout=widgets.Layout(width="180px"),
+        )
         avg_slider = widgets.FloatSlider(
             value=0.5, min=0.1, max=1.0, step=0.05, description="Avg",
             continuous_update=False,
