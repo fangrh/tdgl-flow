@@ -1,8 +1,8 @@
 import threading
 import time
 
-from tdgl_sdk.viewer._iv import IVCache
-from tdgl_sdk.viewer._mesh import estimate_mu_vmax, h5open, load_mesh
+from tdgl_sdk.viewer._iv import IVCache, _extract_timing_steps_from_terminal_currents, _load_tc_from_file
+from tdgl_sdk.viewer._mesh import _collect_mu_maxes, _load_mesh_from_file, h5open, load_mesh
 from tdgl_sdk.viewer._render import (
     FRAME_W,
     RealtimeFrameBuffer,
@@ -672,10 +672,23 @@ def create_player(
     from tdgl_sdk.viewer._debug import DebugLog
     if debug_log is None and debug:
         debug_log = DebugLog()
-    mesh = load_mesh(h5_path, **s3_kwds)
-    mu_vmax = estimate_mu_vmax(h5_path, mesh["total_frames"], **s3_kwds)
+    # Batch all initialization reads into a single HDF5 open.
+    # Previously 3 separate opens (mesh + mu_vmax + IVCache terminal_currents)
+    # → now 1 open, saving ~2-6s over ROS3 port-forward.
+    with h5open(h5_path, "r", **s3_kwds) as f:
+        mesh = _load_mesh_from_file(f)
+        total = mesh["total_frames"]
+        sample = list(range(total)) if total <= 5 else [0, total // 4, total // 2, 3 * total // 4, total - 1]
+        mu_maxes = []
+        _collect_mu_maxes(f, sample, mu_maxes)
+        mu_vmax = float(max(mu_maxes)) if mu_maxes and max(mu_maxes) > 0 else 1.0
+        try:
+            tc_fn = _load_tc_from_file(f)
+        except Exception:
+            tc_fn = None
+        auto_timing_steps = _extract_timing_steps_from_terminal_currents(tc_fn)
     iv_cache = IVCache(
-        h5_path, mesh,
+        h5_path, mesh, tc_fn=tc_fn, auto_timing_steps=auto_timing_steps,
         poll_interval=0.5 if live else 1.0,
         batch_size=256 if live else 2048,
         debug_log=debug_log,

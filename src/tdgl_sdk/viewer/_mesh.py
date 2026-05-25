@@ -21,14 +21,18 @@ def h5open(path, mode="r", **s3_kwds):
 
 def load_mesh(h5_path, **s3_kwds):
     with h5open(h5_path, "r", **s3_kwds) as f:
-        points = np.array(f["solution/device/mesh/sites"])
-        edges = np.array(f["solution/device/mesh/edge_mesh/edges"])
-        edge_dirs = np.array(f["solution/device/mesh/edge_mesh/directions"])
-        edge_lens = np.linalg.norm(edge_dirs, axis=1, keepdims=True)
-        edge_lens[edge_lens == 0] = 1.0
-        norm_dirs = edge_dirs / edge_lens
-        dual_lengths = np.array(f["solution/device/mesh/edge_mesh/dual_edge_lengths"])
-        total = len(f["data"].keys())
+        return _load_mesh_from_file(f)
+
+
+def _load_mesh_from_file(f):
+    points = np.array(f["solution/device/mesh/sites"])
+    edges = np.array(f["solution/device/mesh/edge_mesh/edges"])
+    edge_dirs = np.array(f["solution/device/mesh/edge_mesh/directions"])
+    edge_lens = np.linalg.norm(edge_dirs, axis=1, keepdims=True)
+    edge_lens[edge_lens == 0] = 1.0
+    norm_dirs = edge_dirs / edge_lens
+    dual_lengths = np.array(f["solution/device/mesh/edge_mesh/dual_edge_lengths"])
+    total = len(f["data"].keys())
 
     xmin, xmax = points[:, 0].min(), points[:, 0].max()
     ymin, ymax = points[:, 1].min(), points[:, 1].max()
@@ -59,14 +63,18 @@ def estimate_mu_vmax(h5_path, total, **s3_kwds):
         sample = [0, total // 4, total // 2, 3 * total // 4, total - 1]
     mu_maxes = []
     with h5open(h5_path, "r", **s3_kwds) as f:
-        for i in sample:
-            try:
-                mu_maxes.append(float(np.abs(np.array(f[f"data/{i}/mu"])).max()))
-            except Exception:
-                pass
+        _collect_mu_maxes(f, sample, mu_maxes)
     if mu_maxes and max(mu_maxes) > 0:
         return float(max(mu_maxes))
     return 1.0
+
+
+def _collect_mu_maxes(f, sample, mu_maxes):
+    for i in sample:
+        try:
+            mu_maxes.append(float(np.abs(np.array(f[f"data/{i}/mu"])).max()))
+        except Exception:
+            pass
 
 
 def interpolate(points, grid_pts, raw):

@@ -10,11 +10,15 @@ def _load_terminal_currents(h5_path, **s3_kwds):
     """Load the terminal_currents callable from the HDF5 solution pickle."""
     try:
         with h5open(h5_path, "r", **s3_kwds) as f:
-            raw = f["solution/terminal_currents.pickle"]
-            blob = np.void(raw)
-        return pickle.loads(blob)
+            return _load_tc_from_file(f)
     except Exception:
         return None
+
+
+def _load_tc_from_file(f):
+    raw = f["solution/terminal_currents.pickle"]
+    blob = np.void(raw)
+    return pickle.loads(blob)
 
 
 def _extract_timing_steps_from_terminal_currents(tc_fn):
@@ -46,7 +50,8 @@ def load_timing_steps_from_solution(h5_path, **s3_kwds):
 class IVCache:
     """Incremental I-V cache for an HDF5 file."""
 
-    def __init__(self, h5_path, mesh, poll_interval=1.0, batch_size=64, debug_log=None, **s3_kwds):
+    def __init__(self, h5_path, mesh, tc_fn=None, auto_timing_steps=None,
+                 poll_interval=1.0, batch_size=64, debug_log=None, **s3_kwds):
         self.h5_path = h5_path
         self._mesh = mesh
         self._s3_kwds = s3_kwds
@@ -70,8 +75,11 @@ class IVCache:
         self._version = 0
         self._debug = debug_log
 
-        self._tc_fn = _load_terminal_currents(h5_path, **s3_kwds)
-        self._timing_steps = _extract_timing_steps_from_terminal_currents(self._tc_fn)
+        # Accept pre-loaded values to avoid redundant HDF5 opens during init.
+        # When called from create_player_2x2 (batched init), these are provided
+        # from a single HDF5 open. Otherwise, loaded here (adds ~1-3s over ROS3).
+        self._tc_fn = tc_fn if tc_fn is not None else _load_terminal_currents(h5_path, **s3_kwds)
+        self._timing_steps = auto_timing_steps or _extract_timing_steps_from_terminal_currents(self._tc_fn)
 
     def start(self):
         self.stop()
