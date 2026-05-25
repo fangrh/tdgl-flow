@@ -1,5 +1,7 @@
+pub mod hdf5_index;
 pub mod minio;
 pub mod run_info;
+pub mod frame_reader;
 
 use pyo3::prelude::*;
 use minio::MinioClient;
