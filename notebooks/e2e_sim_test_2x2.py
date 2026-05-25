@@ -49,6 +49,16 @@ TIMING_PARAMS = {
     "ramp_down": True,
 }
 
+# ── Epsilon: Gaussian spot array ────────────────────────────────────────
+# Optional: spatially-varying disorder_epsilon from Gaussian light spots.
+# Set to None to disable. epsilon = clamp(1 - sum(T_i), 0, 1)
+EPSILON_PARAMS = {
+    "type": "gaussian",
+    "positions": [[-1.0, 0.0], [1.0, 0.0]],
+    "widths": [[0.5, 0.5], [0.5, 0.5]],
+    "strengths": [0.3, 0.3],
+}
+
 # I-V averaging: average V over the last average_time of each step's stable period.
 AVERAGE_TIME = 50.0
 
@@ -62,6 +72,7 @@ print("Config ready")
 print(f"  Device: {DEVICE_PARAMS['film_width']}x{DEVICE_PARAMS['film_height']}")
 print(f"  Timing: Je {TIMING_PARAMS['je_initial']}->{TIMING_PARAMS['je_final']}, step={TIMING_PARAMS['je_step']}")
 print(f"  Solver: save_every={SOLVER_OPTIONS['save_every']}")
+print(f"  Epsilon: {len(EPSILON_PARAMS['positions']) if EPSILON_PARAMS else 'disabled'} spots")
 
 #%%
 # ── Step 0: Clear MinIO (optional) ───────────────────────────────────────
@@ -81,6 +92,7 @@ run_id, wf_name = pipeline.submit(
     device_params=DEVICE_PARAMS,
     timing_params=TIMING_PARAMS,
     solver_options=SOLVER_OPTIONS,
+    epsilon_params=EPSILON_PARAMS,
 )
 print(f"Submitted: run_id={run_id}, workflow={wf_name}")
 
