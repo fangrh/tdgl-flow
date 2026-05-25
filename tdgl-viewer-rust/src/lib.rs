@@ -7,11 +7,14 @@ mod buffer;
 mod iv;
 mod colormaps;
 
+use std::sync::Arc;
+
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use minio::MinioClient;
 use hdf5_index::H5Index;
 use buffer::FrameBuffer;
+use iv::IVScanner;
 
 #[pyclass]
 struct TdglViewer {
@@ -22,6 +25,7 @@ struct TdglViewer {
     index: Option<H5Index>,
     buffer: FrameBuffer,
     mu_vmax: f64,
+    iv_scanner: Option<IVScanner>,
 }
 
 #[pymethods]
@@ -35,8 +39,9 @@ impl TdglViewer {
             runs: Vec::new(),
             current_run_index: None,
             index: None,
-            buffer: FrameBuffer::new(21),  // ±10 + current
+            buffer: FrameBuffer::new(21),
             mu_vmax: 1.0,
+            iv_scanner: None,
         }
     }
 
@@ -60,6 +65,8 @@ impl TdglViewer {
         };
         self.current_run_index = Some(idx);
         self.buffer.clear();
+        // Stop any existing IV scanner
+        self.iv_scanner = None;
         let run = &self.runs[idx];
 
         self.index = Some(hdf5_index::build_index(&self.client, &run.run_id)
@@ -68,7 +75,6 @@ impl TdglViewer {
     }
 
     fn render_frame<'py>(&mut self, py: Python<'py>, frame_idx: usize) -> PyResult<Bound<'py, PyBytes>> {
-        // Check buffer first
         if let Some(png) = self.buffer.get(frame_idx) {
             return Ok(PyBytes::new_bound(py, &png));
         }
@@ -96,8 +102,64 @@ impl TdglViewer {
         }))
     }
 
+    /// Get timing steps for the current run as JSON.
+    fn get_timing_steps(&self) -> PyResult<String> {
+        let idx = self.current_run_index
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
+        let steps = self.runs[idx].timing_steps.clone().unwrap_or_default();
+        serde_json::to_string(&steps)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Start background I-V scan with given average_time fraction.
+    /// average_time: fraction of stable period to average (e.g. 0.5).
+    ///   If None, averages over full stable period.
+    #[pyo3(signature = (average_time=None))]
+    fn start_iv_scan(&mut self, average_time: Option<f64>) -> PyResult<()> {
+        let idx = self.current_run_index
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
+        let index = self.index.as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
+        let run = &self.runs[idx];
+        let timing_steps = run.timing_steps.clone().unwrap_or_default();
+
+        if timing_steps.is_empty() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "no timing steps for this run"
+            ));
+        }
+
+        // Stop existing scanner
+        self.iv_scanner = None;
+
+        let client = Arc::new(MinioClient::new(&self.minio_url, "tdgl-results"));
+        let index = Arc::new(index.clone());
+        let run_id = run.run_id.clone();
+
+        self.iv_scanner = Some(IVScanner::start(
+            client, run_id, index, timing_steps, average_time,
+        ));
+        Ok(())
+    }
+
+    /// Get I-V scan progress as JSON.
+    fn get_iv_progress(&self) -> PyResult<String> {
+        match &self.iv_scanner {
+            Some(scanner) => {
+                let prog = scanner.get_progress();
+                serde_json::to_string(&prog)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            }
+            None => Ok(r#"{"points":[],"steps_completed":0,"steps_total":0,"frames_scanned":0,"done":false}"#.into()),
+        }
+    }
+
+    /// Stop I-V scanner if running.
+    fn stop_iv_scan(&mut self) {
+        self.iv_scanner = None;
+    }
+
     fn display(&self) -> PyResult<()> {
-        // UI handled by Python side (Task 9)
         Ok(())
     }
 
@@ -106,7 +168,6 @@ impl TdglViewer {
         self.buffer.clear();
     }
 
-    /// Clear cached index for a specific run, or all runs if run_id is None.
     #[pyo3(signature = (run_id=None))]
     fn clear_cache(&self, run_id: Option<&str>) {
         hdf5_index::clear_index_cache(run_id);

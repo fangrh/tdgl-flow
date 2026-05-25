@@ -62,15 +62,27 @@ impl<'a> FrameReader<'a> {
         if rsmu_offset == 0 || rsdt_offset == 0 {
             return Ok(None);
         }
-        // We need to know K. Read a chunk and detect size from dt.
-        // dt is (K,) float64. Read up to 1024 entries (8KB) — K is typically <200.
-        let max_rs_bytes = 1024 * 8;
+        // Read a generous chunk of dt values and detect actual array length.
+        // dt values are adaptive solver timesteps — always positive, typically 0.01-10.0.
+        // When we read past the array, we hit data from other datasets with
+        // completely different magnitude/pattern. Detect by looking for:
+        // - negative or zero values (invalid for dt)
+        // - extremely large jumps in magnitude
+        let max_entries = 512;
+        let max_rs_bytes = max_entries * 8;
         let rsdt_bytes = self.client.read_range(&self.h5_key, rsdt_offset, max_rs_bytes)?;
-        let rsdt = parse_f64_array(&rsdt_bytes)?;
-        let k = rsdt.len();
+        let raw: Vec<f64> = rsdt_bytes.chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+
+        // Find actual K: first invalid dt value
+        let k = detect_dt_length(&raw);
         if k == 0 {
             return Ok(None);
         }
+
+        let rsdt: Vec<f64> = raw[..k].to_vec();
+
         // rsmu is (2, K) = 2*K float64 values
         let rsmu_nbytes = (2 * k) as u64 * 8;
         let rsmu_bytes = self.client.read_range(&self.h5_key, rsmu_offset, rsmu_nbytes)?;
@@ -86,4 +98,28 @@ fn parse_f64_array(bytes: &[u8]) -> Result<Vec<f64>, String> {
     Ok(bytes.chunks_exact(8)
         .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
         .collect())
+}
+
+/// Detect actual length of dt array by finding where valid adaptive
+/// timesteps end. dt values are always positive and relatively stable.
+/// When we read past the array boundary, values become garbage.
+fn detect_dt_length(raw: &[f64]) -> usize {
+    if raw.is_empty() { return 0; }
+    if raw[0] <= 0.0 { return 0; }
+
+    // Use median of first few values as reference magnitude
+    let ref_len = raw.len().min(10);
+    let mut sorted: Vec<f64> = raw[..ref_len].to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let ref_median = sorted[ref_len / 2];
+
+    for (i, &v) in raw.iter().enumerate() {
+        // dt must be positive
+        if v <= 0.0 { return i; }
+        // If magnitude changes by >100x from reference, we've left the array
+        if i >= ref_len && (v / ref_median > 100.0 || ref_median / v > 100.0) {
+            return i;
+        }
+    }
+    raw.len()
 }
