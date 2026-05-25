@@ -1,0 +1,117 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: cpp-tdgl-sim
+  namespace: tdgl
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: simulation-pipeline
+  activeDeadlineSeconds: 7200
+  workflowMetadata:
+    labels:
+      run-id: "{{workflow.parameters.run-id}}"
+  arguments:
+    parameters:
+      - name: run-id
+        value: ""
+      - name: image
+        value: "ghcr.io/fangrh/cpp-tdgl-runner:latest"
+      - name: device-params-json
+        value: "{}"
+      - name: timing-params-json
+        value: "{}"
+      - name: solver-options-json
+        value: "{}"
+      - name: epsilon-params-json
+        value: "{}"
+  templates:
+    - name: simulation-pipeline
+      steps:
+        - - name: build-device
+            template: build-device-step
+        - - name: build-timing
+            template: build-timing-step
+        - - name: simulate
+            template: simulate-step
+
+    - name: build-device-step
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
+        command: [python, /app/build_device.py]
+        env:
+          - name: RUN_ID
+            value: "{{workflow.parameters.run-id}}"
+          - name: DEVICE_PARAMS
+            value: "{{workflow.parameters.device-params-json}}"
+          - name: DATA_DIR
+            value: "/data"
+        volumeMounts:
+          - name: run-data
+            mountPath: /data
+
+    - name: build-timing-step
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
+        command: [python, /app/build_timing.py]
+        env:
+          - name: RUN_ID
+            value: "{{workflow.parameters.run-id}}"
+          - name: TIMING_PARAMS
+            value: "{{workflow.parameters.timing-params-json}}"
+          - name: DATA_DIR
+            value: "/data"
+        volumeMounts:
+          - name: run-data
+            mountPath: /data
+
+    - name: simulate-step
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
+        command: [python, /app/runner.py]
+        env:
+          - name: TDGL_RUN_ID
+            value: "{{workflow.parameters.run-id}}"
+          - name: DATA_DIR
+            value: "/data"
+          - name: SOLVER_OPTIONS
+            value: "{{workflow.parameters.solver-options-json}}"
+          - name: EPSILON_PARAMS
+            value: "{{workflow.parameters.epsilon-params-json}}"
+          - name: TIMING_PARAMS
+            value: "{{workflow.parameters.timing-params-json}}"
+          - name: MINIO_ENDPOINT
+            value: "http://minio.tdgl.svc.cluster.local:9000"
+          - name: MINIO_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: rootUser
+          - name: MINIO_SECRET_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: rootPassword
+          - name: MINIO_BUCKET
+            value: "tdgl-results"
+        resources:
+          requests:
+            cpu: "4"
+            memory: "8Gi"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+        volumeMounts:
+          - name: run-data
+            mountPath: /data
+
+  volumeClaimTemplates:
+    - metadata:
+        name: run-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
