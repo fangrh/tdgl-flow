@@ -11,7 +11,7 @@ WORKDIR /build
 COPY git-tdgl-light/cpp-tdgl /build/cpp-tdgl
 
 RUN cd /build/cpp-tdgl && \
-    cmake -B build -DCMAKE_BUILD_TYPE=Release && \
+    cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && \
     cmake --build build -j$(nproc)
 
 # Stage 2: Python runtime
