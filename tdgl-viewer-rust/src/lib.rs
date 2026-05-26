@@ -58,6 +58,8 @@ struct TdglViewer {
     show_vt_dot: bool,
     iv_average_time: Option<f64>,
     last_h5_size: Option<u64>,
+    last_viewer_index_size: Option<u64>,
+    last_viewer_index_etag: Option<String>,
 }
 
 impl TdglViewer {
@@ -227,6 +229,8 @@ impl TdglViewer {
             show_vt_dot: true,
             iv_average_time: None,
             last_h5_size: None,
+            last_viewer_index_size: None,
+            last_viewer_index_etag: None,
         }
     }
 
@@ -274,6 +278,14 @@ impl TdglViewer {
         // Track H5 file size for cheap refresh checks
         let h5_key = self.client.h5_key(&run.run_id);
         self.last_h5_size = self.client.object_size(&h5_key).ok().flatten();
+        if let Ok(Some(info)) = self.client.object_info(&self.client.viewer_index_key(&run.run_id))
+        {
+            self.last_viewer_index_size = info.content_length;
+            self.last_viewer_index_etag = info.etag;
+        } else {
+            self.last_viewer_index_size = None;
+            self.last_viewer_index_etag = None;
+        }
 
         // Read mesh sites and build interpolation grid
         let reader = frame_reader::FrameReader::new(&self.client, &run.run_id, &index);
@@ -544,21 +556,36 @@ impl TdglViewer {
 
         // Cheap HEAD request to check if file has grown
         let h5_key = self.client.h5_key(run_id);
-        let current_size = self
+        let current_h5 = self
             .client
-            .object_size(&h5_key)
+            .object_info(&h5_key)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        let current_index = self
+            .client
+            .object_info(&self.client.viewer_index_key(run_id))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 
-        match (current_size, self.last_h5_size) {
-            (Some(size), Some(last)) if size == last => {
-                // File unchanged — nothing to do
-                return Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0));
+        let h5_unchanged = match (current_h5.as_ref(), self.last_h5_size) {
+            (Some(info), Some(last)) => info.content_length == Some(last),
+            (None, None) => true,
+            _ => false,
+        };
+        let index_unchanged = match (current_index.as_ref(), self.last_viewer_index_size.as_ref()) {
+            (Some(info), Some(last_size)) => {
+                info.content_length == Some(*last_size) && info.etag == self.last_viewer_index_etag
             }
-            _ => {}
+            (None, None) => true,
+            _ => false,
+        };
+
+        if h5_unchanged && index_unchanged {
+            return Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0));
         }
 
         // File has grown (or first check) — clear cache and re-scan
-        self.last_h5_size = current_size;
+        self.last_h5_size = current_h5.as_ref().and_then(|info| info.content_length);
+        self.last_viewer_index_size = current_index.as_ref().and_then(|info| info.content_length);
+        self.last_viewer_index_etag = current_index.and_then(|info| info.etag);
         hdf5_index::clear_index_cache(Some(run_id));
 
         let index = hdf5_index::build_index(&self.client, run_id)

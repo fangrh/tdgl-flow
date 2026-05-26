@@ -1,5 +1,11 @@
 use crate::run_info::RunInfo;
 
+#[derive(Clone, Debug, Default)]
+pub struct ObjectInfo {
+    pub content_length: Option<u64>,
+    pub etag: Option<String>,
+}
+
 pub struct MinioClient {
     endpoint: String,
     bucket: String,
@@ -64,6 +70,24 @@ impl MinioClient {
         resp.text().map(Some).map_err(|e| e.to_string())
     }
 
+    pub fn object_info(&self, key: &str) -> Result<Option<ObjectInfo>, String> {
+        let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
+        let resp = self.client.head(&url).send().map_err(|e| e.to_string())?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let etag = resp
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim_matches('"').to_string())
+            .filter(|v| !v.is_empty());
+        Ok(Some(ObjectInfo {
+            content_length: resp.content_length(),
+            etag,
+        }))
+    }
+
     pub fn read_range(&self, key: &str, offset: u64, length: u64) -> Result<Vec<u8>, String> {
         let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
         let range = format!("bytes={}-{}", offset, offset + length - 1);
@@ -92,12 +116,7 @@ impl MinioClient {
     /// Get the content-length of an object via HEAD request.
     /// Returns None if the object doesn't exist or the header is missing.
     pub fn object_size(&self, key: &str) -> Result<Option<u64>, String> {
-        let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
-        let resp = self.client.head(&url).send().map_err(|e| e.to_string())?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        Ok(resp.content_length())
+        Ok(self.object_info(key)?.and_then(|info| info.content_length))
     }
 
     pub fn endpoint(&self) -> &str {
