@@ -225,15 +225,18 @@ def _write_and_upload_sidecars(output_path, bucket, run_id, timing_steps, includ
 def _periodic_upload(output_path, bucket, run_id, stop_event, interval=30, timing_steps=None):
     s3 = _get_minio_client()
     key = f"tdgl-runs/{run_id}/output.h5"
+    first_success = False
     while not stop_event.is_set():
-        stop_event.wait(interval)
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             try:
                 s3.upload_file(output_path, bucket, key)
                 if timing_steps is not None:
                     _write_and_upload_sidecars(output_path, bucket, run_id, timing_steps, include_iv=False)
+                first_success = True
             except Exception:
                 pass
+        wait_seconds = interval if first_success else min(3.0, float(interval))
+        stop_event.wait(wait_seconds)
 
 
 def main():
