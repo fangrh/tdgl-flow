@@ -391,45 +391,48 @@ class TdglViewer:
         suppress_slider, play_token, token, progress_label,
     ):
         prev_frame = -1
+        frame_carry = 0.0
         while not self._stop.is_set():
             if play_token[0] != token:
                 break
 
-            current_t = time_slider.value
             solve_t = self._rust.solve_time()
-
             speed = max(0.1, float(self._speed))
             interval = 1.0 / self._fps
-            next_t = current_t + speed * interval
-
-            if next_t >= solve_t:
-                next_t = solve_t
-
-            next_frame = self._rust.time_to_frame(next_t)
             latest = self._rust.total_frames() - 1
+            current_frame = self._rust.time_to_frame(time_slider.value)
+            current_frame = min(current_frame, latest)
+            latest_t = self._rust.latest_frame_time()
 
             # Reached the end of all available data
-            if next_t >= solve_t and next_frame >= latest:
-                # Render final frame once, then stop
-                if prev_frame != next_frame:
+            if current_frame >= latest:
+                if latest_t < solve_t:
+                    self._stop.wait(1.0)
+                    continue
+                if prev_frame != latest:
                     self._render_loop_frame(
-                        next_frame, image, time_slider, time_label,
+                        latest, image, time_slider, time_label,
                         status, cache, cache_lock, suppress_slider,
                         solve_t,
                     )
-                    prev_frame = next_frame
+                    prev_frame = latest
                 self._stop.set()
                 break
 
-            # Reached latest available frame but sim still running — wait for refresh
-            if next_frame >= latest:
-                self._stop.wait(1.0)
+            frame_carry += speed
+            frame_step = int(frame_carry)
+            if frame_step < 1:
+                self._stop.wait(interval)
                 continue
+            frame_carry -= frame_step
+
+            next_frame = min(current_frame + frame_step, latest)
 
             # Same frame as before — still advance time display but don't re-render
             if next_frame == prev_frame:
                 suppress_slider[0] = True
-                time_slider.value = next_t
+                ft = self._rust.frame_time_at(next_frame)
+                time_slider.value = ft if ft is not None else time_slider.value
                 suppress_slider[0] = False
                 elapsed = 0.001
                 remaining = max(0.0, interval - elapsed)
@@ -461,7 +464,13 @@ class TdglViewer:
 
             threading.Thread(
                 target=self._prefetch_range,
-                args=(next_frame + 1, PREFETCH_AHEAD, 1, cache, cache_lock),
+                args=(
+                    next_frame + max(1, int(speed)),
+                    PREFETCH_AHEAD,
+                    max(1, int(speed)),
+                    cache,
+                    cache_lock,
+                ),
                 daemon=True,
             ).start()
 
