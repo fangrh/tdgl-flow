@@ -35,14 +35,20 @@ jobs:
           CHANGES=$(git diff --name-only "$BASE" HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD)
           echo "$CHANGES"
           PY_RUNNER=false
+          CPP_RUNNER=false
           echo "$CHANGES" | grep -qE "^(services/py-tdgl-runner/(Dockerfile|build_device.py|build_timing.py|runner.py)|src/tdgl_sdk/|src/tdgl_workflow/|pyproject.toml)" && PY_RUNNER=true
+          echo "$CHANGES" | grep -qE "^(services/cpp-tdgl-runner/|git-tdgl-light/cpp-tdgl/|src/tdgl_sdk/|src/tdgl_workflow/|pyproject.toml)" && CPP_RUNNER=true
           echo "$CHANGES" | grep -qE "^src/tdgl_sdk/" && PY_RUNNER=true
           echo "$CHANGES" | grep -qE "^src/tdgl_workflow/" && PY_RUNNER=true
+          echo "$CHANGES" | grep -qE "^src/tdgl_sdk/" && CPP_RUNNER=true
+          echo "$CHANGES" | grep -qE "^src/tdgl_workflow/" && CPP_RUNNER=true
           echo "build_py_runner=$PY_RUNNER" >> "$GITHUB_OUTPUT"
+          echo "build_cpp_runner=$CPP_RUNNER" >> "$GITHUB_OUTPUT"
           echo "Py-runner changed: $PY_RUNNER"
+          echo "Cpp-runner changed: $CPP_RUNNER"
 
       - name: Log in to GHCR
-        if: steps.changes.outputs.build_py_runner == 'true'
+        if: steps.changes.outputs.build_py_runner == 'true' || steps.changes.outputs.build_cpp_runner == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -58,15 +64,31 @@ jobs:
             .
           docker push ghcr.io/fangrh/py-tdgl-runner:$SHA
 
+      - name: Build and push cpp-tdgl-runner
+        if: steps.changes.outputs.build_cpp_runner == 'true'
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          docker build -f services/cpp-tdgl-runner/Dockerfile \
+            -t ghcr.io/fangrh/cpp-tdgl-runner:$SHA \
+            .
+          docker push ghcr.io/fangrh/cpp-tdgl-runner:$SHA
+
       - name: Update manifest tags and commit
-        if: github.ref == 'refs/heads/main' && steps.changes.outputs.build_py_runner == 'true'
+        if: github.ref == 'refs/heads/main' && (steps.changes.outputs.build_py_runner == 'true' || steps.changes.outputs.build_cpp_runner == 'true')
         run: |
           SHA=$(git rev-parse --short HEAD)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" services/py-tdgl-runner/k8s/workflowtemplate.yaml
-          sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" workflows/rectangle-device-builder.yaml
-          echo "Updated py-tdgl-runner tag to $SHA"
-          git add services/py-tdgl-runner/k8s/workflowtemplate.yaml workflows/rectangle-device-builder.yaml
+          if [ "${{ steps.changes.outputs.build_py_runner }}" = "true" ]; then
+            sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" services/py-tdgl-runner/k8s/workflowtemplate.yaml
+            sed -i "s|ghcr.io/fangrh/py-tdgl-runner:[^\"]*|ghcr.io/fangrh/py-tdgl-runner:$SHA|g" workflows/rectangle-device-builder.yaml
+            echo "Updated py-tdgl-runner tag to $SHA"
+            git add services/py-tdgl-runner/k8s/workflowtemplate.yaml workflows/rectangle-device-builder.yaml
+          fi
+          if [ "${{ steps.changes.outputs.build_cpp_runner }}" = "true" ]; then
+            sed -i "s|ghcr.io/fangrh/cpp-tdgl-runner:[^\"]*|ghcr.io/fangrh/cpp-tdgl-runner:$SHA|g" services/cpp-tdgl-runner/k8s/workflowtemplate.yaml
+            echo "Updated cpp-tdgl-runner tag to $SHA"
+            git add services/cpp-tdgl-runner/k8s/workflowtemplate.yaml
+          fi
           git diff --cached --quiet || git commit -m "ci: update image tags to $SHA"
           git push

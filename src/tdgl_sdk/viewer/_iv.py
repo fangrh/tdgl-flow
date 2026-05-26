@@ -72,6 +72,7 @@ class IVCache:
         self._step_avg_error = None
         self._frame_iv_cache = {}
         self._vt_step_cache = {}
+        self._step_frame_ranges = {}
         self._version = 0
         self._debug = debug_log
 
@@ -178,31 +179,45 @@ class IVCache:
                 _, local_times, voltages = cached
                 return local_times, voltages, step_idx, len(timing_steps)
 
-        # Cache miss — expensive! Reads ALL frames in the step over network.
-        # Should never happen during normal playback because _step_average_worker
-        # pre-populates _vt_step_cache. If you see this during playback, the
-        # pre-computation hasn't finished yet or timing_steps was not provided.
+        # Cache miss — use stored frame range when available to avoid scanning
+        # all keys from the beginning. Falls back to full scan if no range known.
         ramp_start = current_step["ramp_start"]
         stable_end = current_step["stable_end"]
+        with self.lock:
+            frame_range = self._step_frame_ranges.get(step_idx)
         with h5open(self.h5_path, "r", **self._s3_kwds) as f:
             data = f["data"]
             local_times = []
             voltages = []
             max_time = current_time
-            for key in sorted(data.keys(), key=lambda item: int(item)):
-                frame_idx = int(key)
-                group = data[key]
-                t_val = float(group.attrs.get("time", frame_idx))
-                if t_val < ramp_start:
-                    continue
-                if t_val >= stable_end:
-                    break
-                i_val, v_val, _ = self._frame_iv_from_group(group, frame_idx)
-                local_times.append(t_val - ramp_start)
-                voltages.append(v_val)
-                max_time = max(max_time, t_val)
-                with self.lock:
-                    self._frame_iv_cache[frame_idx] = (i_val, v_val, t_val)
+            if frame_range is not None:
+                start_ki, end_ki = frame_range
+                for ki in range(start_ki, end_ki + 1):
+                    group = data[str(ki)]
+                    t_val = float(group.attrs.get("time", ki))
+                    if t_val < ramp_start or t_val >= stable_end:
+                        continue
+                    i_val, v_val, _ = self._frame_iv_from_group(group, ki)
+                    local_times.append(t_val - ramp_start)
+                    voltages.append(v_val)
+                    max_time = max(max_time, t_val)
+                    with self.lock:
+                        self._frame_iv_cache[ki] = (i_val, v_val, t_val)
+            else:
+                for key in sorted(data.keys(), key=lambda item: int(item)):
+                    frame_idx = int(key)
+                    group = data[key]
+                    t_val = float(group.attrs.get("time", frame_idx))
+                    if t_val < ramp_start:
+                        continue
+                    if t_val >= stable_end:
+                        break
+                    i_val, v_val, _ = self._frame_iv_from_group(group, frame_idx)
+                    local_times.append(t_val - ramp_start)
+                    voltages.append(v_val)
+                    max_time = max(max_time, t_val)
+                    with self.lock:
+                        self._frame_iv_cache[frame_idx] = (i_val, v_val, t_val)
 
             local_times_arr = np.array(local_times, dtype=np.float64)
             voltages_arr = np.array(voltages, dtype=np.float64)
@@ -316,27 +331,32 @@ class IVCache:
             avg_v = []
             with h5open(self.h5_path, "r", **self._s3_kwds) as f:
                 data = f["data"]
-                keys = sorted(data.keys(), key=lambda key: int(key))
-                times = [float(data[key].attrs.get("time", int(key))) for key in keys]
+                all_keys = sorted(data.keys(), key=lambda key: int(key))
+                n_keys = len(all_keys)
+                key_idx = 0
 
                 for si, step in enumerate(steps):
                     ramp_start = step["ramp_start"]
                     ramp_end = step["ramp_end"]
                     stable_end = step["stable_end"]
                     avg_start = stable_end - self._average_time if self._average_time is not None else ramp_end
-                    step_indices = [
-                        i for i, t in enumerate(times)
-                        if ramp_start <= t < stable_end
-                    ]
-                    if not step_indices:
-                        self._publish_step_average(avg_i, avg_v, len(steps))
-                        continue
 
-                    # Compute V for all frames in step (shared by vt_step cache and I-V average)
+                    # Advance to this step's first frame (reads times incrementally)
+                    while key_idx < n_keys:
+                        t_val = float(data[all_keys[key_idx]].attrs.get("time", int(all_keys[key_idx])))
+                        if t_val >= ramp_start:
+                            break
+                        key_idx += 1
+
+                    step_start = key_idx
                     frame_vt = []
-                    for i in step_indices:
-                        t_val = times[i]
-                        d = data[keys[i]]
+                    while key_idx < n_keys:
+                        k = all_keys[key_idx]
+                        frame_idx = int(k)
+                        d = data[k]
+                        t_val = float(d.attrs.get("time", frame_idx))
+                        if t_val >= stable_end:
+                            break
                         try:
                             mu_rs = np.array(d["running_state/mu"])
                             dt_rs = np.array(d["running_state/dt"])
@@ -356,26 +376,35 @@ class IVCache:
                                 i_val = step["je_end"]
                         else:
                             i_val = step["je_end"]
-                        frame_vt.append((int(keys[i]), t_val, i_val, v_val))
+                        frame_vt.append((frame_idx, t_val, i_val, v_val))
+                        key_idx += 1
 
-                    # IMPORTANT: Pre-populate vt_step cache here to avoid playback stutter.
-                    # Without this, vt_step() would have a cache miss at every Je step
-                    # boundary (~every 8 frames), requiring a full HDF5 scan of all
-                    # frames in the new step over ROS3 (~200ms, far exceeding the 100ms
-                    # frame budget at 10 FPS). This is the #1 cause of periodic stutter.
+                    step_end = max(step_start, key_idx - 1)
+
+                    if not frame_vt:
+                        self._publish_step_average(avg_i, avg_v, len(steps))
+                        continue
+
+                    # Store actual frame indices (not key-list indices) for vt_step
+                    step_frame_start = int(all_keys[step_start])
+                    step_frame_end = int(all_keys[step_end])
+
+                    # Populate caches immediately per-step so playback can use them
+                    # well before the worker finishes all steps.
                     vt_times = [fv[1] - ramp_start for fv in frame_vt]
                     vt_volts = [fv[3] for fv in frame_vt]
                     with self.lock:
+                        self._step_frame_ranges[si + 1] = (step_frame_start, step_frame_end)
                         self._vt_step_cache[si + 1] = (
                             frame_vt[-1][1],
                             np.array(vt_times, dtype=np.float64),
                             np.array(vt_volts, dtype=np.float64),
                         )
-                        for frame_idx, t_val, i_val, v_val in frame_vt:
-                            self._frame_iv_cache[frame_idx] = (i_val, v_val, t_val)
+                        for fi, t_val, i_val, v_val in frame_vt:
+                            self._frame_iv_cache[fi] = (i_val, v_val, t_val)
 
                     # I-V averaging over [avg_start, stable_end]
-                    if times[step_indices[-1]] < avg_start:
+                    if frame_vt[-1][1] < avg_start:
                         self._publish_step_average(avg_i, avg_v, len(steps))
                         continue
                     values = [
@@ -387,12 +416,6 @@ class IVCache:
                         avg_i.append(float(np.mean([x[0] for x in values])))
                         avg_v.append(float(np.mean([x[1] for x in values])))
                     self._publish_step_average(avg_i, avg_v, len(steps))
-            # IMPORTANT: Only bump _version once after all steps are processed.
-            # If incremented per-step, each _publish_step_average triggers
-            # buffer.clear() in _status_loop and show(), destroying prefetched
-            # frames and causing playback stutter (especially with ramp_down
-            # where step count doubles to ~200). Status progress still updates
-            # per-step via step_average_progress() which reads _step_avg_cache.
             with self.lock:
                 self._version += 1
         except Exception as exc:

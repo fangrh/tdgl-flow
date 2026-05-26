@@ -1,12 +1,12 @@
 mod buffer;
-mod colormaps;
+pub mod colormaps;
 mod frame_reader;
-mod hdf5_index;
+pub mod hdf5_index;
 mod interp;
-mod iv;
+pub mod iv;
 mod minio;
-mod renderer;
-mod run_info;
+pub mod renderer;
+pub mod run_info;
 
 use std::collections::HashMap;
 use std::sync::Arc;

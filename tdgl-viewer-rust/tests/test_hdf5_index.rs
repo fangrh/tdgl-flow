@@ -1,5 +1,5 @@
 use std::path::Path;
-use tdgl_viewer_rust::hdf5_index::{build_index_from_file, build_index_from_bytes};
+use tdgl_viewer_rust::hdf5_index::build_index_from_file;
 
 const TEST_DATA_PATH: &str = "tests/test_data.h5";
 
@@ -11,7 +11,10 @@ fn test_data_available() -> bool {
 #[test]
 fn test_build_index_from_file() {
     if !test_data_available() {
-        eprintln!("Skipping test: test data file not found at {}", TEST_DATA_PATH);
+        eprintln!(
+            "Skipping test: test data file not found at {}",
+            TEST_DATA_PATH
+        );
         return;
     }
 
@@ -41,11 +44,7 @@ fn test_build_index_from_file() {
         index.mesh_sites.size > 0,
         "Mesh sites size should be positive"
     );
-    assert_eq!(
-        index.mesh_sites.shape.len(),
-        2,
-        "Sites should be 2D"
-    );
+    assert_eq!(index.mesh_sites.shape.len(), 2, "Sites should be 2D");
     assert_eq!(
         index.mesh_sites.shape[1], 2,
         "Sites should have 2 columns (x, y)"
@@ -54,8 +53,14 @@ fn test_build_index_from_file() {
     println!("Index built successfully:");
     println!("  Total frames: {}", index.total_frames);
     println!("  Mesh points: {}", index.mesh_points);
-    println!("  Sites offset: {:#x}, size: {}", index.mesh_sites.offset, index.mesh_sites.size);
-    println!("  Edges offset: {:#x}, size: {}", index.mesh_edges.offset, index.mesh_edges.size);
+    println!(
+        "  Sites offset: {:#x}, size: {}",
+        index.mesh_sites.offset, index.mesh_sites.size
+    );
+    println!(
+        "  Edges offset: {:#x}, size: {}",
+        index.mesh_edges.offset, index.mesh_edges.size
+    );
     println!("  Frame 0 psi offset: {:#x}", index.frame_psi_offsets[0]);
     println!("  Frame 0 mu offset: {:#x}", index.frame_mu_offsets[0]);
 }
@@ -90,7 +95,10 @@ fn test_known_offsets() {
     assert_eq!(index.mesh_sites.size, 20032, "Sites size (1252 * 2 * 8)");
 
     // Frame 0 has no running state
-    assert_eq!(index.frame_rsdt_offsets[0], 0, "Frame 0 should have no rs_dt");
+    assert_eq!(
+        index.frame_rsdt_offsets[0], 0,
+        "Frame 0 should have no rs_dt"
+    );
 
     // Frame 1 has running state
     assert_eq!(index.frame_rsdt_offsets[1], 0xd4a6b, "Frame 1 rs_dt offset");
@@ -131,7 +139,9 @@ fn test_mu_offsets_follow_psi_offsets() {
         assert!(
             mu_off > psi_off,
             "Frame {}: mu offset {:#x} should be after psi offset {:#x}",
-            i, mu_off, psi_off
+            i,
+            mu_off,
+            psi_off
         );
 
         // mu should be within the same frame (before next psi)
@@ -143,7 +153,9 @@ fn test_mu_offsets_follow_psi_offsets() {
         assert!(
             mu_off < next_psi,
             "Frame {}: mu offset {:#x} should be before next psi offset {:#x}",
-            i, mu_off, next_psi
+            i,
+            mu_off,
+            next_psi
         );
     }
 }
@@ -175,19 +187,23 @@ fn test_running_state_offsets() {
         assert!(
             rsmu > rsdt,
             "Frame {}: rsmu offset {:#x} should be after rsdt offset {:#x}",
-            i, rsmu, rsdt
+            i,
+            rsmu,
+            rsdt
         );
     }
 }
 
 #[test]
 fn test_bad_signature_rejected() {
-    let data = vec![0u8; 1024];
-    let result = build_index_from_bytes(&data);
+    let path = std::env::temp_dir().join("tdgl_bad_signature.h5");
+    std::fs::write(&path, vec![0u8; 1024]).unwrap();
+    let result = build_index_from_file(&path);
+    let _ = std::fs::remove_file(path);
     assert!(result.is_err());
     assert!(
-        result.unwrap_err().contains("signature"),
-        "Error should mention signature"
+        result.unwrap_err().contains("HDF5"),
+        "Error should mention HDF5"
     );
 }
 
@@ -198,16 +214,20 @@ fn test_valid_hdf5_signature() {
         return;
     }
 
-    let data = std::fs::read(TEST_DATA_PATH).unwrap();
-
     // Check HDF5 signature
     let expected_sig: [u8; 8] = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
-    assert_eq!(
-        &data[..8], &expected_sig,
-        "File should have valid HDF5 signature"
-    );
+    let mut sig = [0u8; 8];
+    use std::io::Read;
+    std::fs::File::open(TEST_DATA_PATH)
+        .unwrap()
+        .read_exact(&mut sig)
+        .unwrap();
+    assert_eq!(&sig, &expected_sig, "File should have valid HDF5 signature");
 
     // Should be able to build index
-    let result = build_index_from_bytes(&data);
-    assert!(result.is_ok(), "Should successfully build index from valid HDF5 file");
+    let result = build_index_from_file(Path::new(TEST_DATA_PATH));
+    assert!(
+        result.is_ok(),
+        "Should successfully build index from valid HDF5 file"
+    );
 }

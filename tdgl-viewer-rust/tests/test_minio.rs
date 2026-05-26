@@ -17,9 +17,21 @@ fn test_parse_manifest() {
     assert_eq!(run.status, "completed");
     assert_eq!(run.n_frames, Some(12400));
     let label = run.display_label();
-    assert!(label.contains("abc-123"), "label should contain id: {}", label);
-    assert!(label.contains("6x4"), "label should contain film: {}", label);
-    assert!(label.contains("0->20"), "label should contain je range: {}", label);
+    assert!(
+        label.contains("abc-123"),
+        "label should contain id: {}",
+        label
+    );
+    assert!(
+        label.contains("6x4"),
+        "label should contain film: {}",
+        label
+    );
+    assert!(
+        label.contains("0->20"),
+        "label should contain je range: {}",
+        label
+    );
 }
 
 #[test]

@@ -16,8 +16,22 @@ from tdgl_viewer_rust import TdglViewer
 print("Import OK")
 
 #%%
+MINIO_URL = "http://localhost:30900"
+DEFAULT_FPS = 10
+DEFAULT_SPEED = 1
+DEFAULT_AVERAGE_TIME = 0.5
+DEFAULT_SHOW_VT_DOT = True
+
+VIEWER_DEFAULTS = dict(
+    fps=DEFAULT_FPS,
+    speed=DEFAULT_SPEED,
+    average_time=DEFAULT_AVERAGE_TIME,
+    show_vt_dot=DEFAULT_SHOW_VT_DOT,
+)
+
+#%%
 # ── Step 1: List runs ─────────────────────────────────────────────────────
-viewer = TdglViewer("http://localhost:30900")
+viewer = TdglViewer(MINIO_URL, **VIEWER_DEFAULTS)
 runs = viewer.list_runs()
 print(f"Found {len(runs)} runs\n")
 for i, label in enumerate(runs):
@@ -60,7 +74,7 @@ print(f"P50: {sorted(times)[N//2]:.1f}ms, P95: {sorted(times)[int(N*0.95)]:.1f}m
 #%%
 # ── Step 5: Start IV scan and measure ─────────────────────────────────────
 viewer.open(run_index=SELECTED_INDEX)
-viewer.start_iv_scan(average_time=0.5)
+viewer.start_iv_scan(average_time=DEFAULT_AVERAGE_TIME)
 print("IV scan started (background thread)")
 
 for i in range(15):
@@ -93,7 +107,7 @@ if prog["points"]:
     ax.plot(I, V, "r-o", markersize=4, linewidth=1)
     ax.set_xlabel("Je (applied current)")
     ax.set_ylabel("V (voltage)")
-    ax.set_title(f"I-V Curve ({len(I)} points, avg_time=0.5)")
+    ax.set_title(f"I-V Curve ({len(I)} points, avg_time={DEFAULT_AVERAGE_TIME})")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -132,7 +146,7 @@ viewer.stop_iv_scan()
 viewer.open(run_index=SELECTED_INDEX)
 total = viewer.total_frames()
 
-viewer.start_iv_scan(average_time=0.5)
+viewer.start_iv_scan(average_time=DEFAULT_AVERAGE_TIME)
 print(f"Playing {total} frames while IV scans...")
 
 render_times = []
@@ -149,10 +163,11 @@ print(f"IV: {prog['steps_completed']}/{prog['steps_total']} steps, done={prog['d
 
 #%%
 # ── Step 9: Interactive player ─────────────────────────────────────────────
-# Full interactive viewer with play/pause, run selector, FPS, avg slider.
+# Full interactive viewer with play/pause, run selector, FPS, speed,
+# V(t) dot toggle, and IV scan average controls.
 # Requires Jupyter/VS Code Interactive with ipywidgets.
 
-viewer2 = TdglViewer("http://localhost:30900")
+viewer2 = TdglViewer(MINIO_URL, **VIEWER_DEFAULTS)
 viewer2.open(run_index=SELECTED_INDEX)
 viewer2.display()
 
