@@ -15,10 +15,11 @@ RUN cd /build/cpp-tdgl && \
     cmake --build build -j$(nproc)
 
 # Stage 2: Python runtime
-FROM python:3.13-slim
+FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libhdf5-dev liblapack3 libumfpack5 && \
+    python3 python3-pip python-is-python3 \
+    libhdf5-dev liblapack3 libsuitesparse-dev && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/cpp-tdgl/build/tdgl_solve /usr/local/bin/cpp-tdgl-solve
