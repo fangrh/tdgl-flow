@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, "/app/vendor")
 
 import boto3
+import h5py
 import numpy as np
 import tdgl
 from botocore.config import Config as BotoConfig
@@ -46,7 +47,181 @@ def _upload_manifest(manifest, bucket, run_id):
     _upload_to_minio(manifest_path, bucket, f"tdgl-runs/{run_id}/manifest.json")
 
 
-def _periodic_upload(output_path, bucket, run_id, stop_event, interval=30):
+def _dataset_location(ds):
+    shape = [int(d) for d in ds.shape]
+    size = int(np.prod(shape, dtype=np.int64)) * int(ds.dtype.itemsize)
+    offset = ds.id.get_offset()
+    if offset is None:
+        offset = 0
+    return {
+        "offset": int(offset),
+        "size": int(size),
+        "element_size": int(ds.dtype.itemsize),
+        "shape": shape,
+    }
+
+
+def _find_dataset(file, paths):
+    for path in paths:
+        if path in file:
+            return file[path]
+    return None
+
+
+def _compute_frame_voltage(rsmu, rsdt):
+    k = len(rsdt)
+    if k == 0 or len(rsmu) < 2 * k:
+        return None
+    voltage = np.asarray(rsmu[:k]) - np.asarray(rsmu[k:2 * k])
+    dt_sum = float(np.sum(rsdt))
+    if dt_sum > 0:
+        return float(np.sum(voltage * rsdt) / dt_sum)
+    return float(np.mean(voltage))
+
+
+def _build_viewer_index(output_path):
+    with h5py.File(output_path, "r") as f:
+        data = f["data"]
+        frame_indices = sorted(int(name) for name in data.keys() if str(name).isdigit())
+        if not frame_indices:
+            raise RuntimeError("No frames found in HDF5 output")
+
+        first = data[str(frame_indices[0])]
+        n_sites = int(first["psi"].shape[0])
+
+        frame_psi_offsets = []
+        frame_mu_offsets = []
+        frame_rsmu_offsets = []
+        frame_rsdt_offsets = []
+        frame_rsdt_sizes = []
+        frame_supercurrent_offsets = []
+        frame_times = []
+        cumulative_time = 0.0
+
+        for fi in frame_indices:
+            group = data[str(fi)]
+            frame_psi_offsets.append(int(group["psi"].id.get_offset() or 0))
+            frame_mu_offsets.append(int(group["mu"].id.get_offset() or 0) if "mu" in group else 0)
+            if "supercurrent" in group:
+                frame_supercurrent_offsets.append(int(group["supercurrent"].id.get_offset() or 0))
+            else:
+                frame_supercurrent_offsets.append(0)
+
+            rsmu_offset = 0
+            rsdt_offset = 0
+            rsdt_size = 0
+            if "running_state" in group:
+                rs = group["running_state"]
+                if "mu" in rs:
+                    rsmu_offset = int(rs["mu"].id.get_offset() or 0)
+                if "dt" in rs:
+                    rsdt = rs["dt"]
+                    rsdt_offset = int(rsdt.id.get_offset() or 0)
+                    rsdt_size = int(np.prod(rsdt.shape, dtype=np.int64)) * int(rsdt.dtype.itemsize)
+                    cumulative_time += float(np.sum(rsdt[...]))
+            frame_rsmu_offsets.append(rsmu_offset)
+            frame_rsdt_offsets.append(rsdt_offset)
+            frame_rsdt_sizes.append(rsdt_size)
+            frame_times.append(cumulative_time)
+
+        sites = _find_dataset(
+            f,
+            ["solution/device/mesh/sites", "mesh/sites", "sites", "mesh_sites"],
+        )
+        edges = _find_dataset(f, ["mesh/edges", "edges", "mesh_edges"])
+        psi = first["psi"]
+
+        return {
+            "mesh_sites": _dataset_location(sites) if sites is not None else {
+                "offset": 0, "size": n_sites * 2 * 8, "element_size": 8, "shape": [n_sites, 2],
+            },
+            "mesh_edges": _dataset_location(edges) if edges is not None else {
+                "offset": 0, "size": 0, "element_size": 0, "shape": [],
+            },
+            "frame_psi_offsets": frame_psi_offsets,
+            "frame_mu_offsets": frame_mu_offsets,
+            "frame_rsmu_offsets": frame_rsmu_offsets,
+            "frame_rsdt_offsets": frame_rsdt_offsets,
+            "frame_rsdt_sizes": frame_rsdt_sizes,
+            "frame_supercurrent_offsets": frame_supercurrent_offsets,
+            "total_frames": len(frame_indices),
+            "mesh_points": n_sites,
+            "frame_times": frame_times,
+            "file_size": os.path.getsize(output_path),
+            "psi_compressed": bool(psi.compression or psi.chunks is not None),
+        }
+
+
+def _compute_iv_sidecar(output_path, timing_steps, average_time=0.5):
+    index = _build_viewer_index(output_path)
+    frame_times = index["frame_times"]
+    points = []
+    vt_by_step = {}
+
+    with h5py.File(output_path, "r") as f:
+        data = f["data"]
+        for step_idx, step in enumerate(timing_steps):
+            ramp_start = float(step["ramp_start"])
+            ramp_end = float(step["ramp_end"])
+            stable_end = float(step["stable_end"])
+            stable_duration = max(0.0, stable_end - ramp_end)
+            avg_start = stable_end - float(average_time) * stable_duration
+            vt = []
+            v_sum = 0.0
+            v_count = 0
+
+            for fi, frame_time in enumerate(frame_times):
+                if frame_time < ramp_start:
+                    continue
+                if frame_time >= stable_end:
+                    break
+                group = data.get(str(fi))
+                if group is None or "running_state" not in group:
+                    continue
+                rs = group["running_state"]
+                if "mu" not in rs or "dt" not in rs:
+                    continue
+                voltage = _compute_frame_voltage(rs["mu"][...].reshape(-1), rs["dt"][...].reshape(-1))
+                if voltage is None or not np.isfinite(voltage):
+                    continue
+                vt.append([float(frame_time - ramp_start), voltage])
+                if frame_time >= avg_start:
+                    v_sum += voltage
+                    v_count += 1
+
+            if vt:
+                sample = max(1, len(vt) // 300)
+                vt_by_step[str(step_idx)] = vt[::sample]
+            if v_count:
+                points.append({
+                    "i": float(step.get("je_end", 0.0)),
+                    "v": float(v_sum / v_count),
+                    "step_idx": step_idx,
+                })
+
+    return {
+        "average_time": average_time,
+        "points": points,
+        "vt_by_step": vt_by_step,
+    }
+
+
+def _write_and_upload_sidecars(output_path, bucket, run_id, timing_steps, include_iv=False):
+    index = _build_viewer_index(output_path)
+    index_path = os.path.join(DATA_DIR, "viewer-index.json")
+    with open(index_path, "w") as f:
+        json.dump(index, f)
+    _upload_to_minio(index_path, bucket, f"tdgl-runs/{run_id}/viewer-index.json")
+
+    if include_iv:
+        iv = _compute_iv_sidecar(output_path, timing_steps, average_time=0.5)
+        iv_path = os.path.join(DATA_DIR, "iv.json")
+        with open(iv_path, "w") as f:
+            json.dump(iv, f)
+        _upload_to_minio(iv_path, bucket, f"tdgl-runs/{run_id}/iv.json")
+
+
+def _periodic_upload(output_path, bucket, run_id, stop_event, interval=30, timing_steps=None):
     """Background thread: upload growing HDF5 to MinIO every interval seconds."""
     s3 = _get_minio_client()
     key = f"tdgl-runs/{run_id}/output.h5"
@@ -55,6 +230,8 @@ def _periodic_upload(output_path, bucket, run_id, stop_event, interval=30):
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             try:
                 s3.upload_file(output_path, bucket, key)
+                if timing_steps is not None:
+                    _write_and_upload_sidecars(output_path, bucket, run_id, timing_steps, include_iv=False)
             except Exception:
                 pass
 
@@ -162,7 +339,7 @@ def main() -> None:
     upload_stop = threading.Event()
     upload_thread = threading.Thread(
         target=_periodic_upload,
-        args=(output_path, bucket, run_id, upload_stop, 30),
+        args=(output_path, bucket, run_id, upload_stop, 30, steps),
         daemon=True,
     )
     upload_thread.start()
@@ -181,6 +358,7 @@ def main() -> None:
         upload_stop.set()
         upload_thread.join(timeout=60)
         _upload_to_minio(output_path, bucket, f"tdgl-runs/{run_id}/output.h5")
+        _write_and_upload_sidecars(output_path, bucket, run_id, steps, include_iv=True)
 
         manifest = {
             "run_id": run_id,

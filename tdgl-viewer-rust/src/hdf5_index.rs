@@ -1,554 +1,328 @@
-/// HDF5 Binary Parser — locates dataset byte offsets by scanning the raw file.
-///
-/// Strategy: Instead of fully parsing the HDF5 metadata tree (which uses v2 object
-/// headers, fractal heaps, and B-tree v2), we scan for Data Layout v3 contiguous
-/// messages of the form: `[03][01][8-byte-offset][8-byte-size]`.
-///
-/// We filter matches by known dataset sizes to identify which match corresponds to
-/// which dataset. The scan is O(file_size) but only reads each byte once and uses
-/// minimal memory. For a 2.2 GB file, this takes under 1 second.
-///
-/// The file is expected to be loaded entirely into memory (e.g., via mmap or a
-/// single download from MinIO). For remote use, the caller downloads the file first.
-
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
+use hdf5::Dataset;
+use hdf5_sys::h5d::{H5Dget_create_plist, H5Dget_offset};
+use hdf5_sys::h5p::{H5Pclose, H5Pget_nfilters};
 use serde::{Deserialize, Serialize};
 
 /// Byte offset and size of a contiguous dataset within the HDF5 file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetLocation {
-    /// Absolute byte offset in the file where raw data starts.
     pub offset: u64,
-    /// Total bytes of raw data.
     pub size: u64,
-    /// Bytes per element (8 for float64/int64, 16 for complex128).
     pub element_size: u64,
-    /// Shape of the dataset, e.g. vec![1500, 2] for an (N,2) array.
     pub shape: Vec<u64>,
+}
+
+impl Default for DatasetLocation {
+    fn default() -> Self {
+        DatasetLocation {
+            offset: 0,
+            size: 0,
+            element_size: 0,
+            shape: vec![],
+        }
+    }
 }
 
 /// Index of all TDGL datasets within an HDF5 file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct H5Index {
-    /// Mesh site coordinates: (N, 2) float64.
     pub mesh_sites: DatasetLocation,
-    /// Mesh edge connectivity: (M, 2) int64.
     pub mesh_edges: DatasetLocation,
-    /// Byte offsets of data/{i}/psi raw data for each frame.
     pub frame_psi_offsets: Vec<u64>,
-    /// Byte offsets of data/{i}/mu raw data for each frame.
     pub frame_mu_offsets: Vec<u64>,
-    /// Byte offsets of data/{i}/running_state/mu raw data for each frame.
-    /// 0 if the frame has no running_state (e.g., frame 0).
     pub frame_rsmu_offsets: Vec<u64>,
-    /// Byte offsets of data/{i}/running_state/dt raw data for each frame.
-    /// 0 if the frame has no running_state.
     pub frame_rsdt_offsets: Vec<u64>,
-    /// Byte offsets of data/{i}/supercurrent raw data for each frame.
+    /// Byte sizes of running_state/dt arrays (K*8 per frame).
+    #[serde(default)]
+    pub frame_rsdt_sizes: Vec<u64>,
     pub frame_supercurrent_offsets: Vec<u64>,
-    /// Total number of frames.
     pub total_frames: usize,
-    /// Number of mesh points (N = sites.shape[0]).
     pub mesh_points: usize,
+    pub frame_times: Vec<f64>,
+    #[serde(default)]
+    pub file_size: u64,
+    /// Whether psi datasets use chunked+compressed storage.
+    #[serde(default)]
+    pub psi_compressed: Option<bool>,
 }
 
-/// A candidate Data Layout match found during scanning.
-#[derive(Debug)]
-struct LayoutCandidate {
-    offset: u64, // data offset
-    size: u64,   // data size
+/// Get the byte offset of a dataset's raw data in the file.
+fn dataset_offset(ds: &Dataset) -> u64 {
+    unsafe { H5Dget_offset(ds.id()) as u64 }
 }
 
-/// Scan raw bytes for Data Layout v3 contiguous patterns.
-/// Pattern: [0x03][0x01][8-byte-LE-offset][8-byte-LE-size]
-/// Returns all candidates sorted by data offset.
-fn scan_layout_candidates(data: &[u8]) -> Vec<LayoutCandidate> {
-    let mut candidates = Vec::new();
-    let len = data.len();
-
-    if len < 18 {
-        return candidates;
-    }
-
-    let mut i = 0;
-    while i < len - 17 {
-        if data[i] == 0x03 && data[i + 1] == 0x01 {
-            let data_offset = u64::from_le_bytes([
-                data[i + 2], data[i + 3], data[i + 4], data[i + 5],
-                data[i + 6], data[i + 7], data[i + 8], data[i + 9],
-            ]);
-            let data_size = u64::from_le_bytes([
-                data[i + 10], data[i + 11], data[i + 12], data[i + 13],
-                data[i + 14], data[i + 15], data[i + 16], data[i + 17],
-            ]);
-
-            // Sanity checks: offset must be within file, size must be reasonable
-            if data_offset > 0 && data_offset < len as u64 && data_size > 0 && data_size < len as u64
-                && data_offset + data_size <= len as u64
-                && data_size.is_multiple_of(8)
-            {
-                candidates.push(LayoutCandidate {
-                    offset: data_offset,
-                    size: data_size,
-                });
-                // Skip past this match to avoid overlapping
-                i += 18;
-                continue;
-            }
+/// Check if a dataset uses chunked storage with filters (e.g. gzip compression).
+fn is_dataset_compressed(ds: &Dataset) -> bool {
+    unsafe {
+        let dcpl = H5Dget_create_plist(ds.id());
+        if dcpl < 0 {
+            return false;
         }
-        i += 1;
+        let n_filters = H5Pget_nfilters(dcpl);
+        H5Pclose(dcpl);
+        n_filters > 0
     }
-
-    candidates.sort_by_key(|c| c.offset);
-    candidates
 }
 
-/// Classify scanned candidates into typed dataset locations.
-///
-/// TDGL files have these dataset sizes:
-/// - psi: N * 16 bytes (complex128, where N = n_sites)
-/// - mu: N * 8 bytes (float64)
-/// - sites: N * 2 * 8 = N * 16 bytes (float64) — same as psi!
-/// - edges: M * 2 * 8 bytes (int64)
-/// - supercurrent: M * 8 bytes (float64)
-/// - normal_current: M * 8 bytes (float64)
-/// - induced_vector_potential: M * 2 * 8 bytes (float64)
-/// - running_state/mu: 2 * K * 8 bytes (float64, K varies)
-/// - running_state/dt: K * 8 bytes (float64, K varies)
-///
-/// Classification strategy:
-/// 1. Find psi size (N*16) and mu size (N*8) by looking for size pairs where
-///    one is 2x the other AND their counts are nearly equal (1:1 ratio per frame).
-///    This distinguishes psi/mu from supercurrent/normal_current (same size, 2:1 ratio).
-/// 2. Group candidates by size to identify roles.
-/// 3. The sites dataset is at the end of the file (after all frames) with size N*16.
-/// 4. Frames appear as repeating sequences of datasets at increasing offsets.
-fn classify_candidates(candidates: &[LayoutCandidate], file_len: u64) -> Result<H5Index, String> {
-    // Group by size
-    let mut size_groups: std::collections::HashMap<u64, Vec<&LayoutCandidate>> =
-        std::collections::HashMap::new();
-    for c in candidates {
-        size_groups.entry(c.size).or_default().push(c);
-    }
+/// Build H5Index by parsing the HDF5 file with the hdf5 crate.
+pub fn build_index_from_file(path: &Path) -> Result<H5Index, String> {
+    let file = hdf5::File::open(path).map_err(|e| format!("Failed to open HDF5 file: {}", e))?;
 
-    if candidates.is_empty() {
-        return Err("No Data Layout candidates found in file".into());
-    }
+    let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
-    // Collect size -> count
-    let size_counts: std::collections::HashMap<u64, usize> = size_groups
+    let data_group = file
+        .group("data")
+        .map_err(|e| format!("No 'data' group: {}", e))?;
+
+    // Collect and sort frame indices
+    let mut frame_indices: Vec<usize> = data_group
+        .member_names()
+        .map_err(|e| format!("Failed to list data members: {}", e))?
         .iter()
-        .map(|(size, group)| (*size, group.len()))
+        .filter_map(|n| n.parse::<usize>().ok())
         .collect();
+    frame_indices.sort_unstable();
+    let total_frames = frame_indices.len();
 
-    // Identify mu_size and psi_size:
-    // psi and mu appear once per frame, so their counts should be nearly equal.
-    // Among all size pairs (S, 2*S) with high counts, pick the one where
-    // the count ratio is closest to 1.0 (both appear the same number of times).
-    //
-    // This distinguishes from e.g. supercurrent+normal_current (both same size,
-    // so 2x the per-size count) whose "double" has a different count.
-    let mut best_mu_size: Option<u64> = None;
-    let mut best_psi_size: Option<u64> = None;
-    let mut best_score: f64 = f64::MAX; // lower is better
-
-    for (&s, &s_count) in &size_counts {
-        if s_count < 10 || s > 1_000_000 || s < 16 || s % 8 != 0 {
-            continue;
-        }
-        let double = s * 2;
-        if let Some(&d_count) = size_counts.get(&double) {
-            if d_count < 10 {
-                continue;
-            }
-            // The count ratio: psi has slightly fewer candidates (one is the sites dataset)
-            // so psi_count may be mu_count + 1. We want ratio close to 1.0.
-            let ratio = if s_count > d_count {
-                s_count as f64 / d_count as f64
-            } else {
-                d_count as f64 / s_count as f64
-            };
-            // psi/mu ratio should be ~1.0 (within 5%).
-            // supercurrent/normal_current count is 2x the frame count, while their
-            // "double" (induced_vector_potential or edges) has ~1x the frame count.
-            // So the ratio for the wrong pair would be ~2.0.
-            let score = (ratio - 1.0).abs();
-            if score < best_score {
-                best_score = score;
-                best_mu_size = Some(s);
-                best_psi_size = Some(double);
-            }
-        }
+    if total_frames == 0 {
+        return Err("No frames found in HDF5 file".into());
     }
 
-    let mu_size = best_mu_size.ok_or("Could not identify mu dataset size (N*8)")?;
-    let psi_size_val = best_psi_size.ok_or("Could not identify psi dataset size (N*16)")?;
-    let n_sites = (mu_size / 8) as usize;
+    // Determine n_sites from first frame's psi dataset
+    let first_group = data_group
+        .group(&frame_indices[0].to_string())
+        .map_err(|e| format!("Failed to open first frame: {}", e))?;
+    let psi_ds = first_group
+        .dataset("psi")
+        .map_err(|e| format!("No psi in frame 0: {}", e))?;
+    let psi_shape = psi_ds.shape();
+    let n_sites = psi_shape[0];
+    let n_sites_u64 = n_sites as u64;
 
-    // Now identify edge-related sizes
-    // supercurrent/normal_current both have M*8 bytes
-    // induced_vector_potential has M*16 bytes
-    // edges has M*2*8 = M*16 bytes too (same as induced_vector_potential)
-
-    // Find edge_size: look for a size that appears only a few times (1-2 for edges)
-    // and is not psi_size (to distinguish sites from psi)
-
-    // Collect psi candidates (size == psi_size_val)
-    let psi_candidates = size_groups.get(&psi_size_val).map(|g| g.as_slice()).unwrap_or(&[]);
-    let mu_candidates = size_groups.get(&mu_size).map(|g| g.as_slice()).unwrap_or(&[]);
-
-    // Sort psi candidates by offset
-    let mut psi_sorted: Vec<&LayoutCandidate> = psi_candidates.to_vec();
-    psi_sorted.sort_by_key(|c| c.offset);
-
-    // Sort mu candidates by offset
-    let mut mu_sorted: Vec<&LayoutCandidate> = mu_candidates.to_vec();
-    mu_sorted.sort_by_key(|c| c.offset);
-
-    // Identify frame boundaries:
-    // For each frame, the datasets appear in order:
-    // psi, mu, supercurrent, normal_current, induced_vector_potential
-    // [+ running_state/mu, running_state/dt for frames >= 1]
-    //
-    // The psi candidates include both frame psi data AND the mesh sites data.
-    // The sites data is near the end of the file (after all frames).
-    //
-    // Strategy: psi offsets that form a monotonically increasing sequence are frames.
-    // The one that's far away (near the end) is the sites dataset.
-
-    // Identify the sites dataset and remove false-positive outliers from psi candidates.
-    //
-    // The psi candidates may include:
-    // 1. False positives from HDF5 metadata (small offsets, far from real data)
-    // 2. The mesh sites dataset (same size N*16, near end of file)
-    // 3. Real frame psi data (the bulk, evenly spaced)
-    //
-    // Strategy:
-    // - Compute gaps between consecutive candidates
-    // - Find the median gap (typical frame spacing)
-    // - Remove any candidate whose gap from predecessor is >5x the median
-    // - The one removed from the end of the file is sites
-
-    let (frame_psi, mesh_sites_loc) = if psi_sorted.len() <= 2 {
-        // Too few to distinguish
-        (
-            psi_sorted.to_vec(),
-            DatasetLocation {
-                offset: 0,
-                size: 0,
-                element_size: 0,
-                shape: vec![],
-            },
-        )
-    } else {
-        // Compute gaps between consecutive candidates
-        let mut gaps: Vec<u64> = Vec::with_capacity(psi_sorted.len() - 1);
-        for i in 1..psi_sorted.len() {
-            gaps.push(psi_sorted[i].offset - psi_sorted[i - 1].offset);
-        }
-
-        // Find median gap (typical frame spacing)
-        let mut sorted_gaps = gaps.clone();
-        sorted_gaps.sort();
-        let median_gap = sorted_gaps[sorted_gaps.len() / 2];
-
-        // Use 2.5x median as threshold for outlier detection.
-        // Real frame gaps cluster tightly around the median (~1.0-1.1x).
-        // False positives produce gaps of 3.7x+ the median.
-        let gap_threshold = (median_gap * 5 / 2) as u64; // 2.5x median
-
-        // Remove false positives from the front (candidates with abnormal gap to next)
-        let mut start: usize = 0;
-        while start < psi_sorted.len() - 1 {
-            let gap = psi_sorted[start + 1].offset - psi_sorted[start].offset;
-            if gap > gap_threshold {
-                start += 1;
-            } else {
-                break;
-            }
-        }
-
-        // The sites dataset: it's the psi-sized candidate with the highest offset.
-        // It may be within the frame sequence (small gap) or slightly beyond it.
-        // We identify it as the last psi-sized candidate in the file.
-        let sites_idx = psi_sorted.len() - 1;
-        let sites_loc = DatasetLocation {
-            offset: psi_sorted[sites_idx].offset,
-            size: psi_sorted[sites_idx].size,
-            element_size: 8,
-            shape: vec![n_sites as u64, 2],
-        };
-
-        // Frames are from start to sites_idx (exclusive)
-        let frames: Vec<&LayoutCandidate> = (start..sites_idx)
-            .map(|i| psi_sorted[i])
-            .collect();
-
-        (frames, sites_loc)
-    };
-
-    // Now find edges: look for a size that appears only 1 time and is not psi/mu
-    // The edges dataset is typically the largest unique size
-    let mut edges_loc = DatasetLocation {
-        offset: 0,
-        size: 0,
-        element_size: 0,
-        shape: vec![],
-    };
-
-    // Find running_state sizes: they are small (K*8 and 2*K*8 where K is ~50)
-    // rs_dt has the smallest non-trivial size
-    // rs_mu has size 2 * rs_dt
-
-    // Identify running_state/dt size: look for sizes around 400 (50*8)
-    let mut rsdt_size: u64 = 0;
-    let mut rsmu_size: u64 = 0;
-
-    // Collect sizes sorted by value to check in order
-    let mut sorted_sizes: Vec<u64> = size_counts.keys().copied().collect();
-    sorted_sizes.sort();
-
-    for &s in &sorted_sizes {
-        let count = size_counts[&s];
-        if s >= 200 && s <= 2000 && s % 8 == 0 && count >= 2 {
-            // Check if double this size also exists with similar count
-            if let Some(double_group) = size_groups.get(&(s * 2)) {
-                if double_group.len() >= count - 1 {
-                    rsdt_size = s;
-                    rsmu_size = s * 2;
-                    break;
-                }
-            }
-        }
-    }
-
-    // Collect running_state candidates
-    let rsdt_candidates = if rsdt_size > 0 {
-        size_groups
-            .get(&rsdt_size)
-            .map(|g| {
-                let mut v = g.to_vec();
-                v.sort_by_key(|c| c.offset);
-                v
-            })
-            .unwrap_or_default()
-    } else {
-        vec![]
-    };
-
-    let rsmu_candidates = if rsmu_size > 0 {
-        size_groups
-            .get(&rsmu_size)
-            .map(|g| {
-                let mut v = g.to_vec();
-                v.sort_by_key(|c| c.offset);
-                v
-            })
-            .unwrap_or_default()
-    } else {
-        vec![]
-    };
-
-    // Identify edges: look in remaining sizes for the one that's the largest
-    // and appears only once or twice
-    let known_sizes: std::collections::HashSet<u64> = [
-        psi_size_val,
-        mu_size,
-        rsdt_size,
-        rsmu_size,
-    ]
-    .into_iter()
-    .filter(|&s| s > 0)
-    .collect();
-
-    // Find supercurrent/normal_current size (M*8) and induced_vector_potential (M*16)
-    // These have count == total_frames
-    let sc_nc_size: Option<u64> = {
-        // Look for a size with count >= frame count that's not psi/mu
-        let frame_count = frame_psi.len();
-        let mut found: Option<u64> = None;
-        for &s in &sorted_sizes {
-            let count = size_counts[&s];
-            if !known_sizes.contains(&s) && count >= frame_count && s > mu_size && s % 8 == 0 {
-                found = Some(s);
-                break;
-            }
-        }
-        found
-    };
-
-    // For edges, look for a size that appears only once (or a few times) and is larger
-    for &s in &sorted_sizes {
-        let count = size_counts[&s];
-        if !known_sizes.contains(&s) && count <= 4 && s > 1000 && s % 8 == 0 {
-            if let Some(group) = size_groups.get(&s) {
-                let first = &group[0];
-                edges_loc = DatasetLocation {
-                    offset: first.offset,
-                    size: first.size,
-                    element_size: 8,
-                    shape: vec![(first.size / 16) as u64, 2], // assume (M, 2) int64
-                };
-                break;
-            }
-        }
-    }
-
-    // Build the final index
-    let total_frames = frame_psi.len();
-
-    // Map psi offsets to mu offsets: for each psi, the corresponding mu is the next
-    // mu candidate with offset > psi.offset and offset < next psi offset
-    let mut frame_mu_offsets = vec![0u64; total_frames];
-    for (frame_idx, psi) in frame_psi.iter().enumerate() {
-        let next_psi_offset = if frame_idx + 1 < frame_psi.len() {
-            frame_psi[frame_idx + 1].offset
-        } else {
-            file_len
-        };
-
-        for mu in &mu_sorted {
-            if mu.offset > psi.offset && mu.offset < next_psi_offset {
-                frame_mu_offsets[frame_idx] = mu.offset;
-                break;
-            }
-        }
-    }
-
-    // Map running_state offsets to frames
-    // Each frame with running_state has rsdt and rsmu between psi and next psi
+    let mut frame_psi_offsets = Vec::with_capacity(total_frames);
+    let mut frame_mu_offsets = Vec::with_capacity(total_frames);
     let mut frame_rsmu_offsets = vec![0u64; total_frames];
     let mut frame_rsdt_offsets = vec![0u64; total_frames];
-
-    for (frame_idx, psi) in frame_psi.iter().enumerate() {
-        let next_psi_offset = if frame_idx + 1 < frame_psi.len() {
-            frame_psi[frame_idx + 1].offset
-        } else {
-            file_len
-        };
-
-        for rsdt in &rsdt_candidates {
-            if rsdt.offset > psi.offset && rsdt.offset < next_psi_offset {
-                frame_rsdt_offsets[frame_idx] = rsdt.offset;
-                break;
-            }
-        }
-
-        for rsmu in &rsmu_candidates {
-            if rsmu.offset > psi.offset && rsmu.offset < next_psi_offset {
-                frame_rsmu_offsets[frame_idx] = rsmu.offset;
-                break;
-            }
-        }
-    }
-
-    // Build supercurrent offsets
+    let mut frame_rsdt_sizes = vec![0u64; total_frames];
     let mut frame_supercurrent_offsets = vec![0u64; total_frames];
-    if let Some(sc_size) = sc_nc_size {
-        if let Some(sc_group) = size_groups.get(&sc_size) {
-            let mut sc_sorted = sc_group.to_vec();
-            sc_sorted.sort_by_key(|c| c.offset);
-            for (frame_idx, psi) in frame_psi.iter().enumerate() {
-                let next_psi_offset = if frame_idx + 1 < frame_psi.len() {
-                    frame_psi[frame_idx + 1].offset
-                } else {
-                    file_len
-                };
-                for sc in &sc_sorted {
-                    if sc.offset > psi.offset && sc.offset < next_psi_offset {
-                        frame_supercurrent_offsets[frame_idx] = sc.offset;
-                        break;
-                    }
+    let mut frame_times = Vec::with_capacity(total_frames);
+
+    let mut cumulative_time = 0.0f64;
+
+    for (fi_idx, &fi) in frame_indices.iter().enumerate() {
+        let group_name = fi.to_string();
+        let group = data_group
+            .group(&group_name)
+            .map_err(|e| format!("Failed to open data/{}: {}", fi, e))?;
+
+        // psi
+        let psi = group
+            .dataset("psi")
+            .map_err(|e| format!("No psi in frame {}: {}", fi, e))?;
+        frame_psi_offsets.push(dataset_offset(&psi));
+
+        // mu
+        if let Ok(mu) = group.dataset("mu") {
+            frame_mu_offsets.push(dataset_offset(&mu));
+        } else {
+            frame_mu_offsets.push(0);
+        }
+
+        // supercurrent (optional)
+        if let Ok(sc) = group.dataset("supercurrent") {
+            frame_supercurrent_offsets[fi_idx] = dataset_offset(&sc);
+        }
+
+        // running_state
+        if let Ok(rs) = group.group("running_state") {
+            if let Ok(rsmu) = rs.dataset("mu") {
+                frame_rsmu_offsets[fi_idx] = dataset_offset(&rsmu);
+            }
+            if let Ok(rsdt) = rs.dataset("dt") {
+                frame_rsdt_offsets[fi_idx] = dataset_offset(&rsdt);
+                let dt_shape = rsdt.shape();
+                let k: u64 = dt_shape.iter().map(|&d| d as u64).product();
+                frame_rsdt_sizes[fi_idx] = k * 8;
+                // Read dt values to compute cumulative time
+                if let Ok(dt_arr) = rsdt.read_1d::<f64>() {
+                    cumulative_time += dt_arr.iter().sum::<f64>();
                 }
             }
         }
+
+        frame_times.push(cumulative_time);
     }
 
-    let psi_offsets: Vec<u64> = frame_psi.iter().map(|c| c.offset).collect();
+    // mesh_sites — try common locations
+    let mesh_sites_loc = find_mesh_sites(&file, n_sites_u64);
+
+    // Detect compression on psi dataset
+    let psi_compressed = first_group
+        .dataset("psi")
+        .ok()
+        .map(|ds| is_dataset_compressed(&ds));
+
+    // mesh_edges
+    let mesh_edges_loc = find_mesh_edges(&file);
 
     Ok(H5Index {
         mesh_sites: mesh_sites_loc,
-        mesh_edges: edges_loc,
-        frame_psi_offsets: psi_offsets,
+        mesh_edges: mesh_edges_loc,
+        frame_psi_offsets,
         frame_mu_offsets,
         frame_rsmu_offsets,
         frame_rsdt_offsets,
+        frame_rsdt_sizes,
         frame_supercurrent_offsets,
         total_frames,
         mesh_points: n_sites,
+        frame_times,
+        file_size,
+        psi_compressed,
     })
 }
 
-/// Build an H5Index by scanning a file loaded into memory.
-///
-/// This is the main entry point for the HDF5 parser. It scans the raw bytes
-/// for Data Layout v3 contiguous patterns and classifies them by size to
-/// identify TDGL datasets.
-pub fn build_index_from_bytes(data: &[u8]) -> Result<H5Index, String> {
-    // Validate HDF5 signature
-    let signature: [u8; 8] = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
-    if data.len() < 8 || data[..8] != signature {
-        return Err("Not a valid HDF5 file (bad signature)".into());
+fn find_mesh_sites(file: &hdf5::File, n_sites: u64) -> DatasetLocation {
+    // Try common paths: tdgl canonical, cpp-tdgl, and short aliases
+    for path in &[
+        "solution/device/mesh/sites",
+        "mesh/sites",
+        "sites",
+        "mesh_sites",
+    ] {
+        if let Ok(ds) = file.dataset(path) {
+            let shape: Vec<u64> = ds.shape().into_iter().map(|d| d as u64).collect();
+            let nbytes: u64 = shape.iter().product::<u64>() * 8;
+            return DatasetLocation {
+                offset: dataset_offset(&ds),
+                size: nbytes,
+                element_size: 8,
+                shape,
+            };
+        }
     }
-
-    let file_len = data.len() as u64;
-
-    // Scan for Data Layout candidates
-    let candidates = scan_layout_candidates(data);
-
-    if candidates.is_empty() {
-        return Err("No contiguous Data Layout messages found".into());
+    // Fallback: construct from n_sites
+    DatasetLocation {
+        offset: 0,
+        size: n_sites * 2 * 8,
+        element_size: 8,
+        shape: vec![n_sites, 2],
     }
-
-    classify_candidates(&candidates, file_len)
 }
 
-/// Build an H5Index by loading and scanning a local file.
-pub fn build_index_from_file(path: &Path) -> Result<H5Index, String> {
-    let data = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
-    build_index_from_bytes(&data)
+fn find_mesh_edges(file: &hdf5::File) -> DatasetLocation {
+    for path in &["mesh/edges", "edges", "mesh_edges"] {
+        if let Ok(ds) = file.dataset(path) {
+            let shape: Vec<u64> = ds.shape().into_iter().map(|d| d as u64).collect();
+            let nbytes: u64 = shape.iter().product::<u64>() * 8;
+            return DatasetLocation {
+                offset: dataset_offset(&ds),
+                size: nbytes,
+                element_size: 8,
+                shape,
+            };
+        }
+    }
+    DatasetLocation::default()
 }
 
-/// Build an H5Index by downloading the file from MinIO and scanning it.
+/// Build an H5Index by downloading the file from MinIO and parsing with hdf5.
 ///
 /// Caches the serialized index as JSON in the system temp directory.
 /// On subsequent calls, loads the cached index directly (sub-millisecond).
-/// Only downloads the full H5 file on first access for scanning.
 pub fn build_index(client: &crate::minio::MinioClient, run_id: &str) -> Result<H5Index, String> {
     let index_cache_path = index_cache_path(run_id);
 
-    // Try loading cached index first
-    if index_cache_path.exists() {
-        let json = fs::read_to_string(&index_cache_path)
-            .map_err(|e| format!("Failed to read index cache: {}", e))?;
-        let index: H5Index = serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to parse index cache: {}", e))?;
+    if let Some(index) = build_index_from_sidecar(client, run_id)? {
+        let json = serde_json::to_string(&index)
+            .map_err(|e| format!("Failed to serialize sidecar index: {}", e))?;
+        let _ = fs::write(&index_cache_path, json);
         return Ok(index);
     }
 
-    // No cached index — download and scan
-    let key = client.h5_key(run_id);
-    let url = format!("{}/{}/{}", client.endpoint(), client.bucket(), key);
+    // Try loading cached index, validate against current file size
+    if index_cache_path.exists() {
+        let json = fs::read_to_string(&index_cache_path)
+            .map_err(|e| format!("Failed to read index cache: {}", e))?;
+        if let Ok(index) = serde_json::from_str::<H5Index>(&json) {
+            let h5_key = client.h5_key(run_id);
+            let current_size = client.object_size(&h5_key).ok().flatten();
+            let cache_valid = match (current_size, index.file_size) {
+                (Some(cur), cached) if cached > 0 => cur == cached,
+                _ => true,
+            };
+            if cache_valid {
+                return Ok(index);
+            }
+            let _ = fs::remove_file(&index_cache_path);
+        }
+    }
 
-    let resp = reqwest::blocking::Client::new()
+    let key = client.h5_key(run_id);
+
+    // Download to temp file (streaming, not into memory)
+    let url = format!("{}/{}/{}", client.endpoint(), client.bucket(), key);
+    let temp_path = std::env::temp_dir().join(format!("tdgl_download_{}.h5", run_id));
+
+    let mut resp = reqwest::blocking::Client::new()
         .get(&url)
         .send()
         .map_err(|e| format!("Failed to download H5 file: {}", e))?;
 
-    let bytes = resp.bytes()
-        .map_err(|e| format!("Failed to read response: {}", e))?;
+    {
+        let mut file = fs::File::create(&temp_path)
+            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        resp.copy_to(&mut file)
+            .map_err(|e| format!("Failed to write H5 file: {}", e))?;
+        file.flush()
+            .map_err(|e| format!("Failed to flush: {}", e))?;
+    }
 
-    let index = build_index_from_bytes(&bytes)?;
+    // Parse with HDF5 library
+    let index = build_index_from_file(&temp_path)?;
 
-    // Cache the index as JSON for instant reload
-    let json = serde_json::to_string(&index)
-        .map_err(|e| format!("Failed to serialize index: {}", e))?;
+    // Clean up temp file
+    let _ = fs::remove_file(&temp_path);
+
+    // Cache the index as JSON
+    let json =
+        serde_json::to_string(&index).map_err(|e| format!("Failed to serialize index: {}", e))?;
     fs::write(&index_cache_path, json)
         .map_err(|e| format!("Failed to write index cache: {}", e))?;
 
     Ok(index)
+}
+
+fn build_index_from_sidecar(
+    client: &crate::minio::MinioClient,
+    run_id: &str,
+) -> Result<Option<H5Index>, String> {
+    let key = client.viewer_index_key(run_id);
+    let Some(json) = client.read_text_optional(&key)? else {
+        return Ok(None);
+    };
+    let index: H5Index =
+        serde_json::from_str(&json).map_err(|e| format!("Failed to parse {}: {}", key, e))?;
+
+    let h5_key = client.h5_key(run_id);
+    let current_size = client.object_size(&h5_key).ok().flatten();
+    if let (Some(cur), cached) = (current_size, index.file_size) {
+        if cached > 0 && cur < cached {
+            return Ok(None);
+        }
+    }
+    if index.total_frames == 0
+        || index.frame_times.len() != index.total_frames
+        || index.frame_psi_offsets.len() != index.total_frames
+        || index.frame_mu_offsets.len() != index.total_frames
+    {
+        return Ok(None);
+    }
+    Ok(Some(index))
 }
 
 /// Clear cached index for a specific run (or all runs).
@@ -556,13 +330,18 @@ pub fn clear_index_cache(run_id: Option<&str>) {
     if let Some(id) = run_id {
         let path = index_cache_path(id);
         let _ = fs::remove_file(path);
+        // Also clean up temp download file
+        let temp_h5 = std::env::temp_dir().join(format!("tdgl_download_{}.h5", id));
+        let _ = fs::remove_file(temp_h5);
     } else {
         let temp_dir = std::env::temp_dir();
         if let Ok(entries) = fs::read_dir(&temp_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if name.starts_with("tdgl_idx_") && name.ends_with(".json") {
+                if (name.starts_with("tdgl_idx_") && name.ends_with(".json"))
+                    || (name.starts_with("tdgl_download_") && name.ends_with(".h5"))
+                {
                     let _ = fs::remove_file(entry.path());
                 }
             }
@@ -579,37 +358,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scan_empty_data() {
-        let candidates = scan_layout_candidates(&[]);
-        assert!(candidates.is_empty());
-    }
-
-    #[test]
-    fn test_scan_finds_pattern() {
-        // Build a minimal pattern: 03 01 <offset:8> <size:8>
-        // Use a size small enough to fit within our buffer
-        let offset: u64 = 100;
-        let size: u64 = 16;
-        let mut data = vec![0u8; 256];
-        data[50] = 0x03;
-        data[51] = 0x01;
-        data[52..60].copy_from_slice(&offset.to_le_bytes());
-        data[60..68].copy_from_slice(&size.to_le_bytes());
-
-        // Sanity: offset + size must be within file
-        assert!(offset + size <= data.len() as u64);
-
-        let candidates = scan_layout_candidates(&data);
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].offset, offset);
-        assert_eq!(candidates[0].size, size);
-    }
-
-    #[test]
-    fn test_rejects_bad_signature() {
-        let data = vec![0u8; 1024];
-        let result = build_index_from_bytes(&data);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("signature"));
+    fn test_index_cache_path_format() {
+        let path = index_cache_path("test-run-id");
+        assert!(path.to_string_lossy().contains("tdgl_idx_test-run-id.json"));
     }
 }

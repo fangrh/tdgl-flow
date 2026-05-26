@@ -1,4 +1,4 @@
-use crate::hdf5_index::{H5Index, DatasetLocation};
+use crate::hdf5_index::{DatasetLocation, H5Index};
 use crate::minio::MinioClient;
 
 pub struct FrameReader<'a> {
@@ -18,7 +18,10 @@ impl<'a> FrameReader<'a> {
 
     /// Read complex128 psi for a frame. Returns Vec of [real, imag] pairs.
     pub fn read_psi(&self, frame: usize) -> Result<Vec<[f64; 2]>, String> {
-        let offset = self.index.frame_psi_offsets.get(frame)
+        let offset = self
+            .index
+            .frame_psi_offsets
+            .get(frame)
             .ok_or_else(|| format!("frame {} out of range", frame))?;
         let nbytes = self.index.mesh_points as u64 * 16; // complex128 = 16 bytes
         let bytes = self.client.read_range(&self.h5_key, *offset, nbytes)?;
@@ -33,7 +36,10 @@ impl<'a> FrameReader<'a> {
 
     /// Read float64 mu for a frame.
     pub fn read_mu(&self, frame: usize) -> Result<Vec<f64>, String> {
-        let offset = self.index.frame_mu_offsets.get(frame)
+        let offset = self
+            .index
+            .frame_mu_offsets
+            .get(frame)
             .ok_or_else(|| format!("frame {} out of range", frame))?;
         let nbytes = self.index.mesh_points as u64 * 8;
         let bytes = self.client.read_range(&self.h5_key, *offset, nbytes)?;
@@ -57,37 +63,81 @@ impl<'a> FrameReader<'a> {
     /// Read running_state/mu (2, K) flattened and running_state/dt (K,) for voltage.
     /// Returns (rsmu_flat, rsdt_flat) or None if frame has no running state.
     pub fn read_running_state(&self, frame: usize) -> Result<Option<(Vec<f64>, Vec<f64>)>, String> {
-        let rsmu_offset = self.index.frame_rsmu_offsets.get(frame).copied().unwrap_or(0);
-        let rsdt_offset = self.index.frame_rsdt_offsets.get(frame).copied().unwrap_or(0);
+        let rsmu_offset = self
+            .index
+            .frame_rsmu_offsets
+            .get(frame)
+            .copied()
+            .unwrap_or(0);
+        let rsdt_offset = self
+            .index
+            .frame_rsdt_offsets
+            .get(frame)
+            .copied()
+            .unwrap_or(0);
         if rsmu_offset == 0 || rsdt_offset == 0 {
             return Ok(None);
         }
-        // Read a generous chunk of dt values and detect actual array length.
-        // dt values are adaptive solver timesteps — always positive, typically 0.01-10.0.
-        // When we read past the array, we hit data from other datasets with
-        // completely different magnitude/pattern. Detect by looking for:
-        // - negative or zero values (invalid for dt)
-        // - extremely large jumps in magnitude
-        let max_entries = 512;
-        let max_rs_bytes = max_entries * 8;
-        let rsdt_bytes = self.client.read_range(&self.h5_key, rsdt_offset, max_rs_bytes)?;
-        let raw: Vec<f64> = rsdt_bytes.chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
-            .collect();
 
-        // Find actual K: first invalid dt value
-        let k = detect_dt_length(&raw);
-        if k == 0 {
+        // Use exact dt size from HDF5 metadata if available
+        let dt_size_known = self
+            .index
+            .frame_rsdt_sizes
+            .get(frame)
+            .copied()
+            .filter(|&s| s > 0);
+
+        let dt_bytes = match dt_size_known {
+            Some(size) => {
+                let bytes = self.client.read_range(&self.h5_key, rsdt_offset, size)?;
+                let raw = parse_f64_array(&bytes)?;
+                // Validate dt: all must be positive and finite
+                if raw.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                    return Ok(None);
+                }
+                raw
+            }
+            None => {
+                // Fallback: guess dt size from gap between rsmu and rsdt
+                let exact_dt_bytes = rsmu_offset
+                    .checked_sub(rsdt_offset)
+                    .filter(|bytes| *bytes > 0 && bytes % 8 == 0);
+                let max_rs_bytes = exact_dt_bytes.unwrap_or(512 * 8);
+                let rsdt_bytes = self
+                    .client
+                    .read_range(&self.h5_key, rsdt_offset, max_rs_bytes)?;
+                let raw: Vec<f64> = rsdt_bytes
+                    .chunks_exact(8)
+                    .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+                    .collect();
+                let k = if exact_dt_bytes.is_some() {
+                    raw.len()
+                } else {
+                    detect_dt_length(&raw)
+                };
+                if k == 0 {
+                    return Ok(None);
+                }
+                let dt = raw[..k].to_vec();
+                if dt.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+                    return Ok(None);
+                }
+                dt
+            }
+        };
+
+        let k = dt_bytes.len();
+        let rsmu_nbytes = (2 * k) as u64 * 8;
+        let rsmu_bytes = self
+            .client
+            .read_range(&self.h5_key, rsmu_offset, rsmu_nbytes)?;
+        let rsmu = parse_f64_array(&rsmu_bytes)?;
+
+        if rsmu.iter().any(|v| !v.is_finite() || v.abs() > 1e10) {
             return Ok(None);
         }
 
-        let rsdt: Vec<f64> = raw[..k].to_vec();
-
-        // rsmu is (2, K) = 2*K float64 values
-        let rsmu_nbytes = (2 * k) as u64 * 8;
-        let rsmu_bytes = self.client.read_range(&self.h5_key, rsmu_offset, rsmu_nbytes)?;
-        let rsmu = parse_f64_array(&rsmu_bytes)?;
-        Ok(Some((rsmu, rsdt)))
+        Ok(Some((rsmu, dt_bytes)))
     }
 }
 
@@ -95,7 +145,8 @@ fn parse_f64_array(bytes: &[u8]) -> Result<Vec<f64>, String> {
     if bytes.len() % 8 != 0 {
         return Err(format!("not aligned to f64: {} bytes", bytes.len()));
     }
-    Ok(bytes.chunks_exact(8)
+    Ok(bytes
+        .chunks_exact(8)
         .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
         .collect())
 }
@@ -104,8 +155,12 @@ fn parse_f64_array(bytes: &[u8]) -> Result<Vec<f64>, String> {
 /// timesteps end. dt values are always positive and relatively stable.
 /// When we read past the array boundary, values become garbage.
 fn detect_dt_length(raw: &[f64]) -> usize {
-    if raw.is_empty() { return 0; }
-    if raw[0] <= 0.0 { return 0; }
+    if raw.is_empty() {
+        return 0;
+    }
+    if raw[0] <= 0.0 {
+        return 0;
+    }
 
     // Use median of first few values as reference magnitude
     let ref_len = raw.len().min(10);
@@ -115,7 +170,9 @@ fn detect_dt_length(raw: &[f64]) -> usize {
 
     for (i, &v) in raw.iter().enumerate() {
         // dt must be positive
-        if v <= 0.0 { return i; }
+        if v <= 0.0 {
+            return i;
+        }
         // If magnitude changes by >100x from reference, we've left the array
         if i >= ref_len && (v / ref_median > 100.0 || ref_median / v > 100.0) {
             return i;

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Condvar, Mutex};
 
 pub struct FrameBuffer {
     frames: Mutex<HashMap<usize, Vec<u8>>>,
