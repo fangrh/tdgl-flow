@@ -2,7 +2,7 @@
 FROM ubuntu:22.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git libeigen3-dev libhdf5-dev liblapack-dev \
+    build-essential ca-certificates cmake git libeigen3-dev libhdf5-dev liblapack-dev \
     libsuitesparse-dev && \
     rm -rf /var/lib/apt/lists/*
 
