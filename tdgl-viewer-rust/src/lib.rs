@@ -396,13 +396,13 @@ impl TdglViewer {
                 Ok(Some((rsmu, rsdt))) => {
                     let v = iv::compute_frame_voltage(&rsmu, &rsdt);
                     if !v.is_nan() {
+                        current_v = Some(v);
                         // Filter highlight against step V(t) data to catch outliers
                         let is_outlier = vt_data
                             .as_ref()
                             .map_or(false, |vt| is_voltage_outlier(v, vt));
                         if !is_outlier {
                             highlight_vt = Some((t_rel, v));
-                            current_v = Some(v);
                         }
                     }
                 }
