@@ -9,7 +9,9 @@ pub mod renderer;
 pub mod run_info;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use buffer::FrameBuffer;
 use hdf5_index::H5Index;
@@ -60,9 +62,23 @@ struct TdglViewer {
     last_h5_size: Option<u64>,
     last_viewer_index_size: Option<u64>,
     last_viewer_index_etag: Option<String>,
+    debug_log: Mutex<Option<std::fs::File>>,
 }
 
 impl TdglViewer {
+    fn log(&self, msg: &str) {
+        if let Ok(mut guard) = self.debug_log.lock() {
+            if let Some(file) = guard.as_mut() {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let _ = writeln!(file, "[{:.3}] {}", ts, msg);
+                let _ = file.flush();
+            }
+        }
+    }
+
     fn frame_time(&self, frame_idx: usize) -> Option<f64> {
         let index = self.index.as_ref()?;
         if index.frame_times.is_empty() {
@@ -231,7 +247,35 @@ impl TdglViewer {
             last_h5_size: None,
             last_viewer_index_size: None,
             last_viewer_index_etag: None,
+            debug_log: Mutex::new(None),
         }
+    }
+
+    #[pyo3(signature = (path=None))]
+    fn enable_debug(&self, path: Option<String>) -> PyResult<()> {
+        let log_path = path.unwrap_or_else(|| {
+            std::env::temp_dir().join("tdgl-viewer-debug.log").to_string_lossy().to_string()
+        });
+        let file = std::fs::File::create(&log_path)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to create debug log: {}", e
+            )))?;
+        if let Ok(mut guard) = self.debug_log.lock() {
+            *guard = Some(file);
+        }
+        self.log(&format!("Debug logging enabled -> {}", log_path));
+        Ok(())
+    }
+
+    fn disable_debug(&self) {
+        self.log("Debug logging disabled");
+        if let Ok(mut guard) = self.debug_log.lock() {
+            *guard = None;
+        }
+    }
+
+    fn is_debug_enabled(&self) -> bool {
+        self.debug_log.lock().map(|g| g.is_some()).unwrap_or(false)
     }
 
     fn list_runs(&mut self) -> PyResult<Vec<String>> {
@@ -272,8 +316,18 @@ impl TdglViewer {
         self.iv_scanner = None;
         let run = &self.runs[idx];
 
-        let index = hdf5_index::build_index(&self.client, &run.run_id)
+        let t0 = Instant::now();
+        self.log(&format!("open() run_id={}", run.run_id));
+
+        let index = hdf5_index::build_index(&self.client, &run.run_id, Some(&|msg| self.log(msg)))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+        self.log(&format!(
+            "open() build_index OK: {} frames, file_size={}, {:.1}s",
+            index.total_frames,
+            index.file_size,
+            t0.elapsed().as_secs_f64()
+        ));
 
         // Track H5 file size for cheap refresh checks
         let h5_key = self.client.h5_key(&run.run_id);
@@ -292,6 +346,11 @@ impl TdglViewer {
         let sites = reader
             .read_mesh_sites()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        self.log(&format!(
+            "open() mesh loaded: {} sites, total {:.1}s",
+            sites.len(),
+            t0.elapsed().as_secs_f64()
+        ));
         self.interp = Some(InterpolationGrid::new(&sites, NX, NY));
         self.iv_sidecar = self.load_iv_sidecar(&run.run_id).ok().flatten();
 
@@ -554,6 +613,9 @@ impl TdglViewer {
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
         let run_id = &self.runs[idx].run_id;
 
+        let t0 = Instant::now();
+        self.log(&format!("refresh_index() run_id={}", run_id));
+
         // Cheap HEAD request to check if file has grown
         let h5_key = self.client.h5_key(run_id);
         let current_h5 = self
@@ -578,24 +640,44 @@ impl TdglViewer {
             _ => false,
         };
 
+        self.log(&format!(
+            "refresh_index() h5_unchanged={}, idx_unchanged={}, last_h5_size={:?}, last_idx_size={:?}",
+            h5_unchanged, index_unchanged, self.last_h5_size, self.last_viewer_index_size
+        ));
+
         if h5_unchanged && index_unchanged {
             return Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0));
         }
 
-        // File has grown (or first check) — clear cache and re-scan
-        self.last_h5_size = current_h5.as_ref().and_then(|info| info.content_length);
-        self.last_viewer_index_size = current_index.as_ref().and_then(|info| info.content_length);
-        self.last_viewer_index_etag = current_index.and_then(|info| info.etag);
+        // Something changed — try to rebuild index
         hdf5_index::clear_index_cache(Some(run_id));
 
-        let index = hdf5_index::build_index(&self.client, run_id)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
-
-        let total = index.total_frames;
-        self.buffer.clear();
-        self.step_vt_cache.clear();
-        self.index = Some(index);
-        Ok(total)
+        match hdf5_index::build_index(&self.client, run_id, Some(&|msg| self.log(msg))) {
+            Ok(index) => {
+                self.last_h5_size = current_h5.as_ref().and_then(|info| info.content_length);
+                self.last_viewer_index_size = current_index.as_ref().and_then(|info| info.content_length);
+                self.last_viewer_index_etag = current_index.and_then(|info| info.etag);
+                let total = index.total_frames;
+                self.log(&format!(
+                    "refresh_index() rebuilt: {} frames, {:.3}s",
+                    total,
+                    t0.elapsed().as_secs_f64()
+                ));
+                self.buffer.clear();
+                self.step_vt_cache.clear();
+                self.index = Some(index);
+                Ok(total)
+            }
+            Err(_) => {
+                // Rebuild failed — keep existing index, will retry next refresh
+                self.log(&format!(
+                    "refresh_index() rebuild FAILED, keeping {} frames, {:.3}s",
+                    self.index.as_ref().map(|i| i.total_frames).unwrap_or(0),
+                    t0.elapsed().as_secs_f64()
+                ));
+                Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0))
+            }
+        }
     }
 
     fn get_run_info(&self) -> PyResult<Option<String>> {

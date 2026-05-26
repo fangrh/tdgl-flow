@@ -22,8 +22,12 @@ class TdglViewer:
         average_time=0.5,
         show_vt_dot=True,
         refresh_interval=5.0,
+        debug=False,
     ):
         self._rust = _RustViewer(minio_url)
+        self._debug = debug
+        if debug:
+            self._rust.enable_debug()
         self._playing = False
         self._stop = threading.Event()
         self._thread = None
@@ -223,8 +227,10 @@ class TdglViewer:
                     lt = self._rust.latest_frame_time()
                     _latest_frame[0] = n - 1
                     progress_label.value = f"simulated: {lt:.1f} / {_solve_time[0]:.1f}"
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self._debug:
+                        print(f"[viewer-debug] refresh error: {e}")
+                    progress_label.value = f"simulated: {_solve_time[0]:.1f} (refresh err)"
 
         _live_stop.clear()
         t = threading.Thread(target=_live_refresh, daemon=True)

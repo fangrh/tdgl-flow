@@ -26,7 +26,7 @@ DEVICE_PARAMS = {
     "elec_width": 0.2,
     "elec_height": 5.1,
     "elec_y_offset": 0.0,
-    "probe_points": [[1, 0], [-1, 0]],
+    "probe_points": [[-1, 0], [1, 0]],
     "max_edge_length": 0.25,
     "smooth": 100,
 }
@@ -56,7 +56,7 @@ EPSILON_PARAMS = {
     "type": "gaussian",
     "positions": _eps_positions,
     "widths": [[0.4, 0.4]] * len(_eps_positions),
-    "strengths": [0.8] * len(_eps_positions),
+    "strengths": [0.9] * len(_eps_positions),
 }
 
 #%%
@@ -178,6 +178,7 @@ viewer = TdglViewer(
     average_time=0.5,
     show_vt_dot=True,
     refresh_interval=5.0,
+    debug=True,
 )
 
 print(f"Run: {run_id}")
