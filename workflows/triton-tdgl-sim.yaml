@@ -1,0 +1,79 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: triton-tdgl-sim
+  namespace: tdgl
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: run-triton
+  activeDeadlineSeconds: 86400
+
+  arguments:
+    parameters:
+      - name: run-id
+        value: ""
+      - name: image
+        value: "ghcr.io/fangrh/triton-runner:latest"
+      - name: device-pickle-b64
+        value: ""
+      - name: timing-json-b64
+        value: ""
+      - name: solver-options-b64
+        value: "e30="
+      - name: epsilon-params-b64
+        value: ""
+      - name: sbatch-options
+        value: '{"partition":"batch-csl","cpus-per-task":"4","mem":"16G","time":"04:00:00"}'
+      - name: sidecar-interval
+        value: "500"
+
+  templates:
+    - name: run-triton
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: Always
+        command: [python, /app/runner.py]
+        env:
+          - name: TDGL_RUN_ID
+            value: "{{workflow.parameters.run-id}}"
+          - name: TRITON_HOST
+            value: "fangr1@code.triton.aalto.fi"
+          - name: TRITON_WORK_DIR
+            value: "/scratch/work/fangr1/tdgl-runner"
+          - name: DEVICE_PICKLE_B64
+            value: "{{workflow.parameters.device-pickle-b64}}"
+          - name: TIMING_JSON_B64
+            value: "{{workflow.parameters.timing-json-b64}}"
+          - name: SOLVER_OPTIONS_B64
+            value: "{{workflow.parameters.solver-options-b64}}"
+          - name: EPSILON_PARAMS_B64
+            value: "{{workflow.parameters.epsilon-params-b64}}"
+          - name: SBATCH_OPTIONS
+            value: "{{workflow.parameters.sbatch-options}}"
+          - name: SIDECAR_INTERVAL
+            value: "{{workflow.parameters.sidecar-interval}}"
+          - name: MINIO_ENDPOINT
+            value: "http://minio.tdgl.svc.cluster.local:9000"
+          - name: MINIO_ACCESS_KEY
+            value: "minioadmin"
+          - name: MINIO_SECRET_KEY
+            value: "minioadmin123"
+          - name: MINIO_BUCKET
+            value: "tdgl-results"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        volumeMounts:
+          - name: triton-ssh-key
+            mountPath: /root/.ssh
+            readOnly: true
+
+      volumes:
+        - name: triton-ssh-key
+          secret:
+            secretName: triton-ssh-key
+            defaultMode: 0400
