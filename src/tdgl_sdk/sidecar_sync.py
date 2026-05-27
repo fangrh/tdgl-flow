@@ -183,6 +183,7 @@ def build_discrete_viewer_index(local_dir, run_id=None):
         return None
 
     # Read mesh info from first H5
+    # tdgl stores mesh at solution/device/mesh/sites
     mesh_points = 0
     mesh_sites_offset = 0
     mesh_sites_size = 0
@@ -190,11 +191,23 @@ def build_discrete_viewer_index(local_dir, run_id=None):
     if os.path.exists(first_h5):
         try:
             with _h5py.File(first_h5, "r") as f:
-                if "mesh" in f and "sites" in f["mesh"]:
-                    ds = f["mesh"]["sites"]
-                    mesh_points = ds.shape[0]
-                    mesh_sites_offset = ds.id.get_offset() or 0
-                    mesh_sites_size = ds.size * ds.dtype.itemsize
+                sites_ds = None
+                for path in ("mesh/sites", "solution/device/mesh/sites"):
+                    parts = path.split("/")
+                    obj = f
+                    for p in parts:
+                        if p in obj:
+                            obj = obj[p]
+                        else:
+                            obj = None
+                            break
+                    if obj is not None and isinstance(obj, _h5py.Dataset):
+                        sites_ds = obj
+                        break
+                if sites_ds is not None:
+                    mesh_points = sites_ds.shape[0]
+                    mesh_sites_offset = sites_ds.id.get_offset() or 0
+                    mesh_sites_size = sites_ds.size * sites_ds.dtype.itemsize
         except Exception:
             pass
 
