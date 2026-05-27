@@ -7,13 +7,12 @@ import json
 import os
 import pickle
 import tempfile
+import textwrap
 import uuid
 from datetime import datetime, timezone
 
 from dflow import Step, Workflow, config, upload_artifact
 from dflow.plugins.dispatcher import DispatcherExecutor
-
-from tdgl_sdk.sidecar_sync import SidecarSyncOP
 
 
 class DFlowTritonPipeline:
@@ -78,7 +77,6 @@ class DFlowTritonPipeline:
     ) -> tuple[str, str]:
         """Submit a DFlow workflow. Returns (run_id, wf_name)."""
         from dflow import ShellOPTemplate, Inputs, Outputs, InputParameter, InputArtifact, OutputArtifact
-        from dflow.python import PythonOPTemplate
 
         run_id = self._generate_run_id()
         tmp = tempfile.mkdtemp()
@@ -120,36 +118,121 @@ class DFlowTritonPipeline:
             remote_root=f"{self.triton_work_dir}/jobs/{run_id}",
         )
 
+        input_artifacts = {
+            "device": InputArtifact(path="/tmp/device.pkl"),
+            "timing": InputArtifact(path="/tmp/timing.json"),
+            "solver": InputArtifact(path="/tmp/solver_options.json"),
+        }
+        if epsilon_params:
+            input_artifacts["epsilon"] = InputArtifact(path="/tmp/epsilon_params.json")
+
         sim_step = Step(
             name="simulate",
             template=ShellOPTemplate(
                 "simulate",
-                inputs=Inputs(
-                    artifacts={
-                        "device": InputArtifact(path="/tmp/device.pkl"),
-                        "timing": InputArtifact(path="/tmp/timing.json"),
-                        "solver": InputArtifact(path="/tmp/solver_options.json"),
-                    },
-                ),
+                inputs=Inputs(artifacts=input_artifacts),
                 image="python:3.12-slim",
                 script=(
+                    # DFlow/DPDispatcher stores artifacts in nested tmp/ dirs.
+                    # Search the entire job tree for the actual files.
+                    "JOBDIR="
+                    + self.triton_work_dir
+                    + "/jobs/"
+                    + run_id
+                    + " && "
+                    "find $JOBDIR -type f -name device.pkl -exec cp -v {} $JOBDIR/ \\; && "
+                    "find $JOBDIR -type f -name timing.json -exec cp -v {} $JOBDIR/ \\; && "
+                    "find $JOBDIR -type f -name solver_options.json -exec cp -v {} $JOBDIR/ \\; && "
+                    "find $JOBDIR -type f -name epsilon_params.json -exec cp -v {} $JOBDIR/ \\; && "
+                    "ls -la $JOBDIR/ && "
                     "source /scratch/work/fangr1/miniforge3/etc/profile.d/conda.sh && "
                     "conda activate tdgl && "
-                    f"python {self.triton_work_dir}/slurm_runner.py "
-                    f"{run_id} --sidecar-interval {self.sidecar_interval}"
+                    "python "
+                    + self.triton_work_dir
+                    + "/slurm_runner.py "
+                    + run_id
+                    + " --sidecar-interval "
+                    + str(self.sidecar_interval)
                 ),
             ),
             artifacts=artifacts,
             executor=executor,
         )
 
+        sync_script = textwrap.dedent(f"""\
+            python3 -c '
+            import json, os, stat, time, tempfile
+            from tdgl_sdk.sidecar_sync import (
+                rsync_discrete_h5, minio_object_exists, upload_to_minio,
+                upload_json_to_minio, build_discrete_viewer_index,
+                build_discrete_iv_data,
+            )
+
+            run_id = "{run_id}"
+            remote_dir = f"/scratch/work/fangr1/tdgl-runner/jobs/{{run_id}}"
+            local_dir = f"/tmp/triton-{{run_id}}/discrete"
+            ssh_key = os.environ.get("SSH_KEY_PATH", "/root/.ssh/id_rsa")
+            if os.path.exists(ssh_key) and not os.access(ssh_key, os.W_OK):
+                import shutil
+                writable_key = os.path.join(tempfile.gettempdir(), "ssh_key")
+                shutil.copy2(ssh_key, writable_key)
+                os.chmod(writable_key, stat.S_IRUSR | stat.S_IWUSR)
+                ssh_key = writable_key
+            host = os.environ.get("TRITON_HOST", "fangr1@code.triton.aalto.fi")
+            bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
+            endpoint = os.environ.get("MINIO_ENDPOINT", "http://minio.tdgl.svc.cluster.local:9000")
+            timeout = int(os.environ.get("SYNC_TIMEOUT", "14400"))
+
+            start = time.time()
+            while True:
+                if time.time() - start > timeout:
+                    print("SYNC_TIMEOUT")
+                    break
+                try:
+                    rsync_discrete_h5(remote_dir, local_dir, ssh_key, host)
+                    h5_files = sorted(f for f in os.listdir(local_dir) if f.startswith("je_") and f.endswith(".h5"))
+                    for fname in h5_files:
+                        local_path = os.path.join(local_dir, fname)
+                        key = f"tdgl-runs/{{run_id}}/{{fname}}"
+                        if not minio_object_exists(endpoint, bucket, key):
+                            upload_to_minio(local_path, bucket, key, endpoint)
+
+                    index = build_discrete_viewer_index(local_dir, run_id)
+                    if index:
+                        upload_json_to_minio(index, bucket, f"tdgl-runs/{{run_id}}/viewer-index.json", endpoint)
+                    iv = build_discrete_iv_data(local_dir)
+                    if iv:
+                        upload_json_to_minio(iv, bucket, f"tdgl-runs/{{run_id}}/iv.json", endpoint)
+
+                    dindex_path = os.path.join(local_dir, "discrete_index.json")
+                    if os.path.exists(dindex_path):
+                        with open(dindex_path) as f:
+                            status = json.load(f).get("status", "running")
+                        if status in ("completed", "failed"):
+                            print(f"SYNC_DONE: {{status}}")
+                            break
+                except Exception as e:
+                    print(f"discrete-sync error (will retry): {{e}}")
+                time.sleep(5)
+            '
+        """)
+
         sync_step = Step(
             name="sidecar-sync",
-            template=PythonOPTemplate(
-                SidecarSyncOP,
+            template=ShellOPTemplate(
+                "sidecar-sync",
                 image="172.22.133.208:30500/triton-runner:latest",
+                script=sync_script,
+                volumes=[
+                    {
+                        "name": "ssh-key",
+                        "secret": {"secretName": "triton-ssh-key"},
+                    },
+                ],
+                mounts=[
+                    {"name": "ssh-key", "mountPath": "/root/.ssh"},
+                ],
             ),
-            parameters={"run_id": run_id},
         )
 
         wf = Workflow(name=f"triton-tdgl-{run_id}")

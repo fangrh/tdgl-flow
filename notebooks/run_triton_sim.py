@@ -15,7 +15,7 @@ sys.path.insert(0, "../src")
 from tdgl_sdk import DFlowTritonPipeline
 from tdgl_workflow.mesh import build_rectangular_device
 from tdgl_workflow.timing import build_timing
-from tdgl_viewer_rust.widget import TdglViewer
+from tdgl_viewer_rust.widget import TdglDiscreteViewer
 
 MINIO_URL = "http://localhost:30900"
 ARGO_URL = "http://localhost:30080"
@@ -91,6 +91,9 @@ print(f"Timing: {timing_data['n_steps']} steps, solve_time={timing_data['solve_t
 
 #%%
 # ── Submit to Triton ──────────────────────────────────────────────────────
+import os
+os.environ.setdefault("SSH_KEY_PATH", os.path.expanduser("~/.ssh/id_ed25519"))
+
 pipe = DFlowTritonPipeline(
     argo_url=ARGO_URL,
     minio_endpoint=MINIO_URL,
@@ -112,7 +115,7 @@ print("Simulation running on Triton — open viewer below to watch in real-time.
 import time
 import httpx
 
-viewer = TdglViewer(
+viewer = TdglDiscreteViewer(
     MINIO_URL,
     fps=10,
     speed=5,

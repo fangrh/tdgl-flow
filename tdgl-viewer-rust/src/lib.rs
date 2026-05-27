@@ -1,5 +1,7 @@
 mod buffer;
 pub mod colormaps;
+mod discrete_index;
+mod discrete_reader;
 mod frame_reader;
 pub mod hdf5_index;
 mod interp;
@@ -16,32 +18,13 @@ use std::time::Instant;
 use buffer::FrameBuffer;
 use hdf5_index::H5Index;
 use interp::InterpolationGrid;
-use iv::IVScanner;
+use iv::{IVPoint, IVScanner};
 use minio::MinioClient;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use serde::Deserialize;
 
 const NX: usize = 100;
 const NY: usize = 50;
-
-#[derive(Debug, Clone, Deserialize)]
-struct IVSidecarPoint {
-    i: f64,
-    v: f64,
-    #[allow(dead_code)]
-    step_idx: usize,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct IVSidecar {
-    #[serde(default)]
-    average_time: Option<f64>,
-    #[serde(default)]
-    points: Vec<IVSidecarPoint>,
-    #[serde(default)]
-    vt_by_step: HashMap<usize, Vec<(f64, f64)>>,
-}
 
 #[pyclass]
 struct TdglViewer {
@@ -53,7 +36,6 @@ struct TdglViewer {
     buffer: FrameBuffer,
     mu_vmax: f64, // 0.0 = auto-detect from data
     iv_scanner: Option<IVScanner>,
-    iv_sidecar: Option<IVSidecar>,
     interp: Option<InterpolationGrid>,
     step_vt_cache: HashMap<usize, Vec<(f64, f64)>>,
     last_iv_point_count: usize, // track IV progress to invalidate cache
@@ -62,6 +44,7 @@ struct TdglViewer {
     last_h5_size: Option<u64>,
     last_viewer_index_size: Option<u64>,
     last_viewer_index_etag: Option<String>,
+    iv_legacy_points: Vec<IVPoint>,
     debug_log: Mutex<Option<std::fs::File>>,
 }
 
@@ -118,13 +101,6 @@ impl TdglViewer {
         let idx = self.current_run_index?;
         let steps = self.runs[idx].all_timing_steps();
         let step = steps.get(step_idx)?;
-        if let Some(vt) = self
-            .iv_sidecar
-            .as_ref()
-            .and_then(|sidecar| sidecar.vt_by_step.get(&step_idx))
-        {
-            return Some(vt.clone());
-        }
         let index = self.index.as_ref()?;
         let run_id = &self.runs[idx].run_id;
         let reader = frame_reader::FrameReader::new(&self.client, run_id, index);
@@ -161,49 +137,9 @@ impl TdglViewer {
                 _ => {}
             }
         }
-        filter_voltage_outliers(&mut vt);
         Some(vt)
     }
 
-    fn load_iv_sidecar(&self, run_id: &str) -> Result<Option<IVSidecar>, String> {
-        let key = self.client.iv_key(run_id);
-        let Some(json) = self.client.read_text_optional(&key)? else {
-            return Ok(None);
-        };
-        serde_json::from_str::<IVSidecar>(&json)
-            .map(Some)
-            .map_err(|e| format!("Failed to parse {}: {}", key, e))
-    }
-
-    fn iv_sidecar_matches_average(&self, average_time: Option<f64>) -> bool {
-        let Some(sidecar) = &self.iv_sidecar else {
-            return false;
-        };
-        match (sidecar.average_time, average_time) {
-            (Some(a), Some(b)) => (a - b).abs() < 1e-9,
-            (None, None) => true,
-            _ => false,
-        }
-    }
-}
-
-/// Filter voltage outliers using Median Absolute Deviation.
-/// Removes points where |v - median| > threshold * MAD * 1.4826.
-fn filter_voltage_outliers(vt: &mut Vec<(f64, f64)>) {
-    if vt.len() < 3 {
-        return;
-    }
-    let mut volts: Vec<f64> = vt.iter().map(|&(_, v)| v).collect();
-    volts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = volts[volts.len() / 2];
-    let mut devs: Vec<f64> = volts.iter().map(|&v| (v - median).abs()).collect();
-    devs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mad = devs[devs.len() / 2];
-    if mad <= 0.0 {
-        return;
-    }
-    let threshold = mad * 1.4826 * 5.0;
-    vt.retain(|&(_, v)| (v - median).abs() <= threshold);
 }
 
 /// Check if a single voltage value is an outlier relative to a V(t) series.
@@ -238,15 +174,15 @@ impl TdglViewer {
             buffer: FrameBuffer::new(21),
             mu_vmax: 0.0, // auto-detect
             iv_scanner: None,
-            iv_sidecar: None,
             interp: None,
             step_vt_cache: HashMap::new(),
             last_iv_point_count: 0,
             show_vt_dot: true,
-            iv_average_time: None,
+            iv_average_time: Some(0.5),
             last_h5_size: None,
             last_viewer_index_size: None,
             last_viewer_index_etag: None,
+            iv_legacy_points: Vec::new(),
             debug_log: Mutex::new(None),
         }
     }
@@ -278,23 +214,26 @@ impl TdglViewer {
         self.debug_log.lock().map(|g| g.is_some()).unwrap_or(false)
     }
 
-    fn list_runs(&mut self) -> PyResult<Vec<String>> {
-        self.runs = self
-            .client
-            .list_runs()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+    #[pyo3(signature = (refresh=false))]
+    fn list_runs(&mut self, refresh: bool) -> PyResult<Vec<String>> {
+        if refresh || self.runs.is_empty() {
+            self.runs = self
+                .client
+                .list_runs()
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        }
         Ok(self.runs.iter().map(|r| r.display_label()).collect())
     }
 
     #[pyo3(signature = (run_id=None, run_index=None))]
     fn open(&mut self, run_id: Option<&str>, run_index: Option<usize>) -> PyResult<()> {
         if self.runs.is_empty() {
-            self.list_runs()?;
+            self.list_runs(true)?;
         }
         // If looking up by run_id and not found, refresh the list once
         if let Some(id) = run_id {
             if !self.runs.iter().any(|r| r.run_id == id) {
-                self.list_runs()?;
+                self.list_runs(true)?;
             }
         }
         let idx = match (run_id, run_index) {
@@ -311,9 +250,9 @@ impl TdglViewer {
         self.current_run_index = Some(idx);
         self.buffer.clear();
         self.step_vt_cache.clear();
-        self.iv_sidecar = None;
         // Stop any existing IV scanner
         self.iv_scanner = None;
+        self.iv_legacy_points.clear();
         let run = &self.runs[idx];
 
         let t0 = Instant::now();
@@ -329,17 +268,10 @@ impl TdglViewer {
             t0.elapsed().as_secs_f64()
         ));
 
-        // Track H5 file size for cheap refresh checks
-        let h5_key = self.client.h5_key(&run.run_id);
-        self.last_h5_size = self.client.object_size(&h5_key).ok().flatten();
-        if let Ok(Some(info)) = self.client.object_info(&self.client.viewer_index_key(&run.run_id))
-        {
-            self.last_viewer_index_size = info.content_length;
-            self.last_viewer_index_etag = info.etag;
-        } else {
-            self.last_viewer_index_size = None;
-            self.last_viewer_index_etag = None;
-        }
+        // Track sizes for refresh checks (use index metadata, no extra HEAD requests)
+        self.last_h5_size = if index.file_size > 0 { Some(index.file_size) } else { None };
+        self.last_viewer_index_size = None;
+        self.last_viewer_index_etag = None;
 
         // Read mesh sites and build interpolation grid
         let reader = frame_reader::FrameReader::new(&self.client, &run.run_id, &index);
@@ -352,9 +284,23 @@ impl TdglViewer {
             t0.elapsed().as_secs_f64()
         ));
         self.interp = Some(InterpolationGrid::new(&sites, NX, NY));
-        self.iv_sidecar = self.load_iv_sidecar(&run.run_id).ok().flatten();
 
-        self.index = Some(index);
+        self.index = Some(index.clone());
+
+        // Auto-start IV scanner
+        let timing_steps = run.all_timing_steps();
+        if !timing_steps.is_empty() {
+            let client = Arc::new(MinioClient::new(&self.minio_url, "tdgl-results"));
+            let scan_index = Arc::new(index);
+            let scan_run_id = run.run_id.clone();
+            self.iv_scanner = Some(IVScanner::start(
+                client,
+                scan_run_id,
+                scan_index,
+                timing_steps,
+                self.iv_average_time,
+            ));
+        }
         Ok(())
     }
 
@@ -363,16 +309,31 @@ impl TdglViewer {
         py: Python<'py>,
         frame_idx: usize,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        // Track IV progress but don't clear the entire buffer on every new point.
-        // Clearing the buffer forces re-renders of all cached frames (each requiring
-        // multiple MinIO range requests), which causes visible flicker during playback.
-        let current_iv_count = match &self.iv_scanner {
-            Some(scanner) => scanner.get_progress().points.len(),
-            None => 0,
+        // Merge legacy + scanner IV points for change tracking.
+        // Legacy points come from previous scanner instances (before index rebuild).
+        // Scanner points are newer and preferred when step_idx overlaps.
+        let scanner_points: Vec<IVPoint> = match &self.iv_scanner {
+            Some(scanner) => scanner.get_progress().points,
+            None => Vec::new(),
         };
-        let iv_changed = current_iv_count != self.last_iv_point_count;
+        let merged_count = {
+            let mut steps: HashMap<usize, ()> = HashMap::new();
+            for pt in &self.iv_legacy_points {
+                steps.insert(pt.step_idx, ());
+            }
+            for pt in &scanner_points {
+                steps.insert(pt.step_idx, ());
+            }
+            steps.len()
+        };
+        let iv_changed = merged_count != self.last_iv_point_count;
         if iv_changed {
-            self.last_iv_point_count = current_iv_count;
+            self.log(&format!(
+                "render_frame({}) iv_changed: {} -> {} merged (legacy={}, scanner={})",
+                frame_idx, self.last_iv_point_count, merged_count,
+                self.iv_legacy_points.len(), scanner_points.len()
+            ));
+            self.last_iv_point_count = merged_count;
         }
 
         // Use cached frame only if IV data hasn't changed since it was cached.
@@ -469,16 +430,22 @@ impl TdglViewer {
             }
         }
 
-        // I-V curve: accumulated averaged points from background scanner (one per step)
-        let iv_data: Option<Vec<(f64, f64)>> = match &self.iv_scanner {
-            Some(scanner) => {
-                let prog = scanner.get_progress();
-                Some(prog.points.iter().map(|pt| (pt.i, pt.v)).collect())
+        // I-V curve: merge legacy + scanner points (prefer scanner's newer values)
+        let iv_data: Option<Vec<(f64, f64)>> = {
+            let mut merged: HashMap<usize, (f64, f64)> = HashMap::new();
+            for pt in &self.iv_legacy_points {
+                merged.insert(pt.step_idx, (pt.i, pt.v));
             }
-            None => self
-                .iv_sidecar
-                .as_ref()
-                .map(|sidecar| sidecar.points.iter().map(|pt| (pt.i, pt.v)).collect()),
+            for pt in &scanner_points {
+                merged.insert(pt.step_idx, (pt.i, pt.v));
+            }
+            if merged.is_empty() {
+                None
+            } else {
+                let mut points: Vec<(usize, (f64, f64))> = merged.into_iter().collect();
+                points.sort_by_key(|(step_idx, _)| *step_idx);
+                Some(points.into_iter().map(|(_, point)| point).collect())
+            }
         };
 
         // I-V highlight: current frame's instantaneous (Je, V) — like Python's cur_I, cur_V
@@ -520,17 +487,17 @@ impl TdglViewer {
                     renderer::PlotRegion {
                         x0: 0.0,
                         x1: ramp_end,
-                        color: [16, 26, 45, 255],
+                        color: [30, 40, 75, 255],
                     },
                     renderer::PlotRegion {
                         x0: ramp_end,
                         x1: stable_end,
-                        color: [12, 34, 27, 255],
+                        color: [18, 50, 38, 255],
                     },
                     renderer::PlotRegion {
                         x0: avg_start,
                         x1: stable_end,
-                        color: [58, 46, 15, 255],
+                        color: [80, 60, 18, 255],
                     },
                 ]
             });
@@ -628,14 +595,16 @@ impl TdglViewer {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 
         let h5_unchanged = match (current_h5.as_ref(), self.last_h5_size) {
-            (Some(info), Some(last)) => info.content_length == Some(last),
+            // Known size matches — unchanged
+            (Some(info), Some(last)) if last > 0 && info.content_length == Some(last) => true,
+            // HEAD returns 0 or None (multipart upload in progress) — can't tell, treat as unchanged
+            (Some(info), Some(_)) if info.content_length.unwrap_or(0) == 0 => true,
+            (None, Some(_)) => true,
             (None, None) => true,
             _ => false,
         };
-        let index_unchanged = match (current_index.as_ref(), self.last_viewer_index_size.as_ref()) {
-            (Some(info), Some(last_size)) => {
-                info.content_length == Some(*last_size) && info.etag == self.last_viewer_index_etag
-            }
+        let index_unchanged = match (current_index.as_ref(), self.last_viewer_index_etag.as_ref()) {
+            (Some(info), Some(last_etag)) if info.etag.as_deref() == Some(last_etag.as_str()) => true,
             (None, None) => true,
             _ => false,
         };
@@ -654,9 +623,10 @@ impl TdglViewer {
 
         match hdf5_index::build_index(&self.client, run_id, Some(&|msg| self.log(msg))) {
             Ok(index) => {
-                self.last_h5_size = current_h5.as_ref().and_then(|info| info.content_length);
+                let h5_size = current_h5.as_ref().and_then(|info| info.content_length);
+                self.last_h5_size = if h5_size.unwrap_or(0) > 0 { h5_size } else { self.last_h5_size };
                 self.last_viewer_index_size = current_index.as_ref().and_then(|info| info.content_length);
-                self.last_viewer_index_etag = current_index.and_then(|info| info.etag);
+                self.last_viewer_index_etag = current_index.as_ref().and_then(|info| info.etag.clone());
                 let total = index.total_frames;
                 self.log(&format!(
                     "refresh_index() rebuilt: {} frames, {:.3}s",
@@ -666,6 +636,42 @@ impl TdglViewer {
                 self.buffer.clear();
                 self.step_vt_cache.clear();
                 self.index = Some(index);
+
+                // Restart IV scanner with updated index to discover new timing steps.
+                // Preserve old scanner's points as legacy data to avoid visual I-V reset.
+                let idx = self.current_run_index.unwrap();
+                let run = &self.runs[idx];
+                let timing_steps = run.all_timing_steps();
+                if !timing_steps.is_empty() {
+                    // Merge old scanner points into legacy (dedup by step_idx)
+                    if let Some(scanner) = &self.iv_scanner {
+                        let prog = scanner.get_progress();
+                        let mut merged: HashMap<usize, IVPoint> = HashMap::new();
+                        for pt in &self.iv_legacy_points {
+                            merged.insert(pt.step_idx, pt.clone());
+                        }
+                        for pt in &prog.points {
+                            merged.insert(pt.step_idx, pt.clone());
+                        }
+                        self.iv_legacy_points = merged.into_values().collect();
+                    }
+                    let index = self.index.as_ref().unwrap();
+                    let client = Arc::new(MinioClient::new(&self.minio_url, "tdgl-results"));
+                    let scan_index = Arc::new(index.clone());
+                    let scan_run_id = run.run_id.clone();
+                    self.iv_scanner = Some(IVScanner::start(
+                        client,
+                        scan_run_id,
+                        scan_index,
+                        timing_steps,
+                        self.iv_average_time,
+                    ));
+                    self.log(&format!(
+                        "refresh_index() IV scanner restarted with {} frames, {} legacy points preserved",
+                        total, self.iv_legacy_points.len()
+                    ));
+                }
+
                 Ok(total)
             }
             Err(_) => {
@@ -858,28 +864,28 @@ impl TdglViewer {
             ));
         }
 
-        // Stop existing scanner
+        let old_count = match &self.iv_scanner {
+            Some(scanner) => scanner.get_progress().points.len(),
+            None => 0,
+        };
+        self.log(&format!(
+            "start_iv_scan() RESTARTING scanner (had {} points), average_time={:?}",
+            old_count, average_time
+        ));
+
         self.iv_scanner = None;
         self.iv_average_time = average_time;
+        self.iv_legacy_points.clear();
         self.buffer.clear();
 
-        if self.iv_sidecar_matches_average(average_time)
-            && self
-                .iv_sidecar
-                .as_ref()
-                .is_some_and(|sidecar| !sidecar.points.is_empty())
-        {
-            return Ok(());
-        }
-
         let client = Arc::new(MinioClient::new(&self.minio_url, "tdgl-results"));
-        let index = Arc::new(index.clone());
+        let scan_index = Arc::new(index.clone());
         let run_id = run.run_id.clone();
 
         self.iv_scanner = Some(IVScanner::start(
             client,
             run_id,
-            index,
+            scan_index,
             timing_steps,
             average_time,
         ));
@@ -895,35 +901,21 @@ impl TdglViewer {
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
             }
             None => {
-                if let Some(sidecar) = &self.iv_sidecar {
-                    let points: Vec<iv::IVPoint> = sidecar
-                        .points
-                        .iter()
-                        .map(|pt| iv::IVPoint {
-                            i: pt.i,
-                            v: pt.v,
-                            step_idx: pt.step_idx,
-                        })
-                        .collect();
-                    let prog = iv::IVProgress {
-                        steps_completed: points.len(),
-                        steps_total: points.len(),
-                        frames_scanned: 0,
-                        done: true,
-                        last_error: None,
-                        points,
-                    };
-                    serde_json::to_string(&prog)
-                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-                } else {
-                    Ok(r#"{"points":[],"steps_completed":0,"steps_total":0,"frames_scanned":0,"done":false}"#.into())
-                }
+                Ok(r#"{"points":[],"steps_completed":0,"steps_total":0,"frames_scanned":0,"done":false}"#.into())
             }
         }
     }
 
     /// Stop I-V scanner if running.
     fn stop_iv_scan(&mut self) {
+        let old_count = match &self.iv_scanner {
+            Some(scanner) => scanner.get_progress().points.len(),
+            None => 0,
+        };
+        self.log(&format!(
+            "stop_iv_scan() STOPPING scanner (had {} points)",
+            old_count
+        ));
         self.iv_scanner = None;
     }
 
@@ -947,8 +939,493 @@ impl TdglViewer {
     }
 }
 
+#[pyclass]
+struct TdglDiscreteViewer {
+    minio_url: String,
+    client: MinioClient,
+    run_id: Option<String>,
+    index: Option<discrete_index::DiscreteIndex>,
+    buffer: FrameBuffer,
+    mu_vmax: f64,
+    show_vt_dot: bool,
+    iv_average_time: Option<f64>,
+    interp: Option<InterpolationGrid>,
+    // IV data loaded from iv.json
+    iv_points: Vec<(f64, f64)>,
+    vt_by_step: HashMap<usize, Vec<(f64, f64)>>,
+    debug_log: Mutex<Option<std::fs::File>>,
+}
+
+impl TdglDiscreteViewer {
+    fn log(&self, msg: &str) {
+        if let Ok(mut guard) = self.debug_log.lock() {
+            if let Some(file) = guard.as_mut() {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let _ = writeln!(file, "[{:.3}] {}", ts, msg);
+                let _ = file.flush();
+            }
+        }
+    }
+
+    fn frame_time(&self, frame_idx: usize) -> Option<f64> {
+        let index = self.index.as_ref()?;
+        index.frame_times.get(frame_idx).copied()
+    }
+
+    fn frame_to_step(&self, frame_idx: usize) -> Option<usize> {
+        let index = self.index.as_ref()?;
+        let step_list_idx = *index.frame_step_map.get(frame_idx)?;
+        let step = index.steps.get(step_list_idx)?;
+        Some(step_list_idx)
+    }
+
+    fn load_iv_from_minio(&mut self) {
+        let run_id = match &self.run_id {
+            Some(id) => id.clone(),
+            None => return,
+        };
+        match self.client.read_text_optional(&self.client.iv_key(&run_id)) {
+            Ok(Some(json_str)) => {
+                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    if let Some(points) = data.get("points").and_then(|p| p.as_array()) {
+                        self.iv_points = points
+                            .iter()
+                            .filter_map(|p| {
+                                let i = p.get("i")?.as_f64()?;
+                                let v = p.get("v")?.as_f64()?;
+                                Some((i, v))
+                            })
+                            .collect();
+                    }
+                    if let Some(vt) = data.get("vt_by_step") {
+                        if let Some(obj) = vt.as_object() {
+                            self.vt_by_step.clear();
+                            for (key, arr) in obj {
+                                if let Ok(step_idx) = key.parse::<usize>() {
+                                    if let Some(items) = arr.as_array() {
+                                        let entries: Vec<(f64, f64)> = items
+                                            .iter()
+                                            .filter_map(|item| {
+                                                let a = item.as_array()?;
+                                                Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+                                            })
+                                            .collect();
+                                        self.vt_by_step.insert(step_idx, entries);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.log(&format!(
+                        "load_iv_from_minio() loaded {} IV points, {} vt steps",
+                        self.iv_points.len(),
+                        self.vt_by_step.len()
+                    ));
+                }
+            }
+            Ok(None) => {
+                self.log("load_iv_from_minio() iv.json not found");
+            }
+            Err(e) => {
+                self.log(&format!("load_iv_from_minio() error: {}", e));
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl TdglDiscreteViewer {
+    #[new]
+    fn new(minio_url: String) -> Self {
+        let client = MinioClient::new(&minio_url, "tdgl-results");
+        TdglDiscreteViewer {
+            minio_url,
+            client,
+            run_id: None,
+            index: None,
+            buffer: FrameBuffer::new(21),
+            mu_vmax: 0.0,
+            show_vt_dot: true,
+            iv_average_time: Some(0.5),
+            interp: None,
+            iv_points: Vec::new(),
+            vt_by_step: HashMap::new(),
+            debug_log: Mutex::new(None),
+        }
+    }
+
+    #[pyo3(signature = (path=None))]
+    fn enable_debug(&self, path: Option<String>) -> PyResult<()> {
+        let log_path = path.unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join("tdgl-discrete-debug.log")
+                .to_string_lossy()
+                .to_string()
+        });
+        let file = std::fs::File::create(&log_path).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to create debug log: {}",
+                e
+            ))
+        })?;
+        if let Ok(mut guard) = self.debug_log.lock() {
+            *guard = Some(file);
+        }
+        self.log(&format!("Debug logging enabled -> {}", log_path));
+        Ok(())
+    }
+
+    fn disable_debug(&self) {
+        if let Ok(mut guard) = self.debug_log.lock() {
+            *guard = None;
+        }
+    }
+
+    fn is_debug_enabled(&self) -> bool {
+        self.debug_log
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+    }
+
+    fn open(&mut self, run_id: &str) -> PyResult<()> {
+        let t0 = Instant::now();
+        self.log(&format!("open() run_id={}", run_id));
+        self.run_id = Some(run_id.to_string());
+        self.buffer.clear();
+
+        // Download viewer-index.json
+        let index_key = self.client.viewer_index_key(run_id);
+        let json = self
+            .client
+            .read_text_optional(&index_key)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "viewer-index.json not found for run {}",
+                    run_id
+                ))
+            })?;
+
+        let index: discrete_index::DiscreteIndex = serde_json::from_str(&json)
+            .map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to parse viewer-index.json: {}",
+                    e
+                ))
+            })?;
+
+        if !index.is_valid() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "viewer-index.json is invalid (no frames or mismatched arrays)",
+            ));
+        }
+
+        self.log(&format!(
+            "open() parsed index: {} frames, {} steps, {:.1}s",
+            index.total_frames,
+            index.steps.len(),
+            t0.elapsed().as_secs_f64()
+        ));
+
+        // Read mesh sites from first step's H5
+        let reader = discrete_reader::DiscreteReader::new(&self.client, run_id, &index);
+        let sites = reader
+            .read_mesh_sites()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        self.log(&format!(
+            "open() mesh loaded: {} sites, {:.1}s",
+            sites.len(),
+            t0.elapsed().as_secs_f64()
+        ));
+        self.interp = Some(InterpolationGrid::new(&sites, NX, NY));
+        self.index = Some(index);
+
+        // Load IV data from iv.json
+        self.load_iv_from_minio();
+
+        Ok(())
+    }
+
+    fn render_frame<'py>(
+        &mut self,
+        py: Python<'py>,
+        frame_idx: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        if let Some(png) = self.buffer.get(frame_idx) {
+            return Ok(PyBytes::new_bound(py, &png));
+        }
+
+        let index = self
+            .index
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
+        let run_id = self.run_id.as_ref().unwrap();
+
+        let reader = discrete_reader::DiscreteReader::new(&self.client, run_id, index);
+        let psi = reader
+            .read_psi(frame_idx)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        let mu = reader
+            .read_mu(frame_idx)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        let psi_abs: Vec<f64> = psi
+            .iter()
+            .map(|[re, im]| (re * re + im * im).sqrt())
+            .collect();
+
+        let interp = self
+            .interp
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no interpolation grid"))?;
+        let psi_grid = interp.interpolate(&psi_abs);
+        let mu_grid = interp.interpolate(&mu);
+
+        // Timing step info
+        let step_list_idx = self.frame_to_step(frame_idx);
+        let step_info = step_list_idx.and_then(|si| index.steps.get(si));
+        let current_step = step_list_idx;
+
+        let frame_time = self.frame_time(frame_idx);
+
+        // V-t data for this step (from pre-computed iv.json)
+        let vt_data: Option<Vec<(f64, f64)>> = current_step.and_then(|si| {
+            // Map step_list_idx to the discrete_index step_idx
+            // vt_by_step keys are absolute step indices
+            let abs_step = index.steps.get(si)?.je_end;
+            // Try to match by looking at step_list_idx as key
+            // The vt_by_step uses absolute step_idx from discrete_index
+            // We need to find the right key
+            if let Some(vt) = self.vt_by_step.get(&si) {
+                Some(vt.clone())
+            } else {
+                None
+            }
+        });
+
+        // Compute instantaneous Je
+        let mut current_je: Option<f64> = None;
+        let mut current_v: Option<f64> = None;
+        let mut highlight_vt: Option<(f64, f64)> = None;
+
+        if let (Some(step), Some(ft)) = (step_info, frame_time) {
+            let t_rel = ft - step.ramp_start;
+            let ramp_duration = step.ramp_end - step.ramp_start;
+            if ramp_duration > 0.0 && t_rel < ramp_duration {
+                current_je = Some(step.je_start + (step.je_end - step.je_start) * t_rel / ramp_duration);
+            } else {
+                current_je = Some(step.je_end);
+            }
+
+            match reader.read_running_state(frame_idx) {
+                Ok(Some((rsmu, rsdt))) => {
+                    let v = iv::compute_frame_voltage(&rsmu, &rsdt);
+                    if !v.is_nan() {
+                        current_v = Some(v);
+                        if self.show_vt_dot {
+                            highlight_vt = Some((t_rel, v));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let highlight_iv = match (current_je, current_v) {
+            (Some(je), Some(v)) => Some((je, v)),
+            _ => None,
+        };
+
+        let effective_mu_vmax = if self.mu_vmax > 0.0 {
+            self.mu_vmax
+        } else {
+            let mu_max = mu.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+            (mu_max * 1.1).max(1e-10)
+        };
+
+        let step_info_label = match (current_step, current_je) {
+            (Some(si), Some(je)) => {
+                let total = index.steps.len();
+                Some(format!("step {}/{} Je={:.3}", si + 1, total, je))
+            }
+            _ => None,
+        };
+
+        let vt_regions: Option<Vec<renderer::PlotRegion>> = step_info.map(|step| {
+            let ramp_end = step.ramp_end - step.ramp_start;
+            let stable_end = step.stable_end - step.ramp_start;
+            let stable_duration = (step.stable_end - step.ramp_end).max(0.0);
+            let avg_fraction = self.iv_average_time.unwrap_or(1.0).clamp(0.0, 1.0);
+            let avg_start =
+                (step.stable_end - stable_duration * avg_fraction) - step.ramp_start;
+            vec![
+                renderer::PlotRegion {
+                    x0: 0.0,
+                    x1: ramp_end,
+                    color: [30, 40, 75, 255],
+                },
+                renderer::PlotRegion {
+                    x0: ramp_end,
+                    x1: stable_end,
+                    color: [18, 50, 38, 255],
+                },
+                renderer::PlotRegion {
+                    x0: avg_start,
+                    x1: stable_end,
+                    color: [80, 60, 18, 255],
+                },
+            ]
+        });
+
+        let iv_data_ref: Vec<(f64, f64)> = self.iv_points.clone();
+        let png = renderer::render_frame_2x2(
+            &psi_grid,
+            &mu_grid,
+            effective_mu_vmax,
+            frame_idx,
+            index.total_frames,
+            vt_data.as_deref(),
+            vt_regions.as_deref(),
+            highlight_vt,
+            if !iv_data_ref.is_empty() {
+                Some(iv_data_ref.as_slice())
+            } else {
+                None
+            },
+            highlight_iv,
+            step_info_label.as_deref(),
+        );
+        self.buffer.insert(frame_idx, png.clone());
+        Ok(PyBytes::new_bound(py, &png))
+    }
+
+    fn total_frames(&self) -> PyResult<usize> {
+        Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0))
+    }
+
+    fn frame_time_at(&self, frame_idx: usize) -> PyResult<Option<f64>> {
+        Ok(self.frame_time(frame_idx))
+    }
+
+    fn time_to_frame(&self, t: f64) -> PyResult<usize> {
+        let index = self
+            .index
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
+        if index.frame_times.is_empty() {
+            return Ok(0);
+        }
+        let pos = index.frame_times.partition_point(|&ft| ft <= t);
+        if pos == 0 {
+            return Ok(0);
+        }
+        Ok(pos
+            .saturating_sub(1)
+            .min(index.total_frames.saturating_sub(1)))
+    }
+
+    fn latest_frame_time(&self) -> PyResult<f64> {
+        let index = self
+            .index
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
+        if index.frame_times.is_empty() {
+            return Ok(0.0);
+        }
+        Ok(index.frame_times[index.total_frames.saturating_sub(1)])
+    }
+
+    fn refresh_index(&mut self) -> PyResult<usize> {
+        let run_id = match &self.run_id {
+            Some(id) => id.clone(),
+            None => return Err(pyo3::exceptions::PyRuntimeError::new_err("no run opened")),
+        };
+        let t0 = Instant::now();
+        self.log(&format!("refresh_index() run_id={}", run_id));
+
+        // Re-download viewer-index.json
+        let index_key = self.client.viewer_index_key(&run_id);
+        let json = match self.client.read_text_optional(&index_key) {
+            Ok(Some(j)) => j,
+            Ok(None) => {
+                self.log("refresh_index() viewer-index.json not found");
+                return Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0));
+            }
+            Err(e) => {
+                self.log(&format!("refresh_index() error: {}", e));
+                return Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0));
+            }
+        };
+
+        let index: discrete_index::DiscreteIndex = match serde_json::from_str(&json) {
+            Ok(i) => i,
+            Err(e) => {
+                self.log(&format!("refresh_index() parse error: {}", e));
+                return Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0));
+            }
+        };
+
+        if !index.is_valid() {
+            self.log("refresh_index() index invalid, keeping old");
+            return Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0));
+        }
+
+        let old_frames = self.index.as_ref().map(|i| i.total_frames).unwrap_or(0);
+        if index.total_frames == old_frames && index.status == self.index.as_ref().map(|i| i.status.clone()).unwrap_or_default() {
+            return Ok(old_frames);
+        }
+
+        self.log(&format!(
+            "refresh_index() {} -> {} frames, {:.3}s",
+            old_frames,
+            index.total_frames,
+            t0.elapsed().as_secs_f64()
+        ));
+
+        self.buffer.clear();
+        self.index = Some(index);
+
+        // Reload IV data
+        self.load_iv_from_minio();
+
+        Ok(self.index.as_ref().map(|i| i.total_frames).unwrap_or(0))
+    }
+
+    fn display(&self) -> PyResult<()> {
+        Ok(())
+    }
+
+    fn set_mu_vmax(&mut self, vmax: f64) {
+        self.mu_vmax = vmax;
+        self.buffer.clear();
+    }
+
+    fn set_show_vt_dot(&mut self, show: bool) {
+        self.show_vt_dot = show;
+        self.buffer.clear();
+    }
+
+    fn get_iv_progress(&self) -> PyResult<String> {
+        let n = self.iv_points.len();
+        let total = self.index.as_ref().map(|i| i.total_steps).unwrap_or(0);
+        let completed = self.index.as_ref().map(|i| i.completed_steps).unwrap_or(0);
+        let payload = serde_json::json!({
+            "points_count": n,
+            "steps_completed": completed,
+            "steps_total": total,
+            "done": completed >= total && total > 0,
+        });
+        serde_json::to_string(&payload)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+}
+
 #[pymodule]
 fn tdgl_viewer_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TdglViewer>()?;
+    m.add_class::<TdglDiscreteViewer>()?;
     Ok(())
 }

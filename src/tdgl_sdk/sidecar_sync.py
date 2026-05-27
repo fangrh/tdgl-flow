@@ -138,6 +138,261 @@ def build_iv_data(local_dir):
     return {"points": points, "vt_by_step": vt_by_step}
 
 
+def rsync_discrete_h5(remote_dir, local_dir, ssh_key, host):
+    """Incremental rsync of discrete H5 files and index from Triton."""
+    os.makedirs(local_dir, exist_ok=True)
+    ssh_opts = (
+        f"ssh -i {ssh_key}"
+        " -o StrictHostKeyChecking=no"
+        " -o ConnectTimeout=10"
+        " -o UserKnownHostsFile=/dev/null"
+    )
+    subprocess.run(
+        [
+            "rsync", "-az", "--update", "--partial",
+            "-e", ssh_opts,
+            "--include=je_*.h5",
+            "--include=discrete_index.json",
+            "--exclude=*",
+            f"{host}:{remote_dir}/",
+            f"{local_dir}/",
+        ],
+        timeout=300, check=False,
+    )
+
+
+def build_discrete_viewer_index(local_dir, run_id=None):
+    """Build viewer-compatible index from discrete H5 files.
+
+    Reads local discrete_index.json, parses each step's H5 with h5py to
+    extract byte offsets for psi/mu/running_state, and returns a dict
+    with absolute frame times, step mapping, and per-step offsets.
+    Returns None if no completed steps.
+    """
+    import h5py as _h5py
+
+    index_path = os.path.join(local_dir, "discrete_index.json")
+    if not os.path.exists(index_path):
+        return None
+
+    with open(index_path) as f:
+        dindex = json.load(f)
+
+    completed = [s for s in dindex.get("steps", []) if s.get("status") == "completed"]
+    if not completed:
+        return None
+
+    # Read mesh info from first H5
+    mesh_points = 0
+    mesh_sites_offset = 0
+    mesh_sites_size = 0
+    first_h5 = os.path.join(local_dir, completed[0]["h5_file"])
+    if os.path.exists(first_h5):
+        try:
+            with _h5py.File(first_h5, "r") as f:
+                if "mesh" in f and "sites" in f["mesh"]:
+                    ds = f["mesh"]["sites"]
+                    mesh_points = ds.shape[0]
+                    mesh_sites_offset = ds.id.get_offset() or 0
+                    mesh_sites_size = ds.size * ds.dtype.itemsize
+        except Exception:
+            pass
+
+    # Build per-step offset arrays
+    step_indices = []
+    frame_times = []
+    frame_step_map = []
+    frame_local_idx = []
+    total_frames = 0
+
+    for si, step_info in enumerate(completed):
+        h5_path = os.path.join(local_dir, step_info["h5_file"])
+        if not os.path.exists(h5_path):
+            continue
+
+        step_offsets = {
+            "h5_file": step_info["h5_file"],
+            "je_start": step_info["je_start"],
+            "je_end": step_info["je_end"],
+            "ramp_start": step_info["ramp_start"],
+            "ramp_end": step_info["ramp_end"],
+            "stable_end": step_info["stable_end"],
+            "n_frames": 0,
+            "psi_offsets": [],
+            "mu_offsets": [],
+            "rsmu_offsets": [],
+            "rsdt_offsets": [],
+            "rsdt_sizes": [],
+        }
+
+        try:
+            with _h5py.File(h5_path, "r") as f:
+                if "data" not in f:
+                    continue
+                data = f["data"]
+                frame_keys = sorted(int(k) for k in data.keys() if k.isdigit())
+                step_offsets["n_frames"] = len(frame_keys)
+                step_duration = step_info["stable_end"] - step_info["ramp_start"]
+
+                for li, fi in enumerate(frame_keys):
+                    grp = data[str(fi)]
+
+                    # psi offset
+                    psi_off = grp["psi"].id.get_offset() if "psi" in grp else 0
+                    step_offsets["psi_offsets"].append(psi_off or 0)
+
+                    # mu offset
+                    mu_off = grp["mu"].id.get_offset() if "mu" in grp else 0
+                    step_offsets["mu_offsets"].append(mu_off or 0)
+
+                    # running_state offsets
+                    if "running_state" in grp:
+                        rs = grp["running_state"]
+                        rsmu_off = rs["mu"].id.get_offset() if "mu" in rs else 0
+                        step_offsets["rsmu_offsets"].append(rsmu_off or 0)
+                        if "dt" in rs:
+                            dt_ds = rs["dt"]
+                            rsdt_off = dt_ds.id.get_offset() or 0
+                            rsdt_sz = dt_ds.size * dt_ds.dtype.itemsize
+                            step_offsets["rsdt_offsets"].append(rsdt_off)
+                            step_offsets["rsdt_sizes"].append(rsdt_sz)
+                        else:
+                            step_offsets["rsdt_offsets"].append(0)
+                            step_offsets["rsdt_sizes"].append(0)
+                    else:
+                        step_offsets["rsmu_offsets"].append(0)
+                        step_offsets["rsdt_offsets"].append(0)
+                        step_offsets["rsdt_sizes"].append(0)
+
+                    # Frame time (approximate: spread evenly across step)
+                    n = len(frame_keys)
+                    frac = li / max(n - 1, 1) if n > 1 else 0.0
+                    abs_time = step_info["ramp_start"] + frac * step_duration
+                    frame_times.append(abs_time)
+                    frame_step_map.append(si)
+                    frame_local_idx.append(li)
+                    total_frames += 1
+
+        except Exception:
+            continue
+
+        step_indices.append(step_offsets)
+
+    if total_frames == 0:
+        return None
+
+    return {
+        "total_frames": total_frames,
+        "mesh_points": mesh_points,
+        "mesh_sites_offset": mesh_sites_offset,
+        "mesh_sites_size": mesh_sites_size,
+        "frame_times": frame_times,
+        "frame_step_map": frame_step_map,
+        "frame_local_idx": frame_local_idx,
+        "completed_steps": len(completed),
+        "total_steps": dindex.get("total_steps", len(completed)),
+        "status": dindex.get("status", "running"),
+        "discrete_mode": True,
+        "run_id": run_id,
+        "steps": step_indices,
+    }
+
+
+def build_discrete_iv_data(local_dir):
+    """Build I-V curve data from discrete H5 files.
+
+    Reads each completed step's H5, extracts V_t and I_t from running_state,
+    returns points list and vt_by_step dict.
+    Returns None if no data.
+    """
+    import h5py as _h5py
+
+    index_path = os.path.join(local_dir, "discrete_index.json")
+    if not os.path.exists(index_path):
+        return None
+
+    with open(index_path) as f:
+        dindex = json.load(f)
+
+    completed = [s for s in dindex.get("steps", []) if s.get("status") == "completed"]
+    if not completed:
+        return None
+
+    points = []
+    seen_je = []
+    vt_by_step = {}
+
+    for step_info in completed:
+        h5_path = os.path.join(local_dir, step_info["h5_file"])
+        if not os.path.exists(h5_path):
+            continue
+
+        try:
+            with _h5py.File(h5_path, "r") as f:
+                if "data" not in f:
+                    continue
+                data = f["data"]
+                indices = sorted(int(k) for k in data.keys() if k.isdigit())
+                if not indices:
+                    continue
+
+                step_idx = step_info["step_idx"]
+                step_key = str(step_idx)
+
+                # Use last frame's V_t as the steady-state voltage for this Je
+                last_group = data[str(indices[-1])]
+                v_t = 0.0
+                if "running_state" in last_group:
+                    rs = last_group["running_state"]
+                    if "mu" in rs and "dt" in rs:
+                        rsmu = rs["mu"][...].reshape(-1)
+                        rsdt = rs["dt"][...].reshape(-1)
+                        k = len(rsdt)
+                        if k > 0 and len(rsmu) >= 2 * k:
+                            voltage = np.asarray(rsmu[:k]) - np.asarray(rsmu[k:2 * k])
+                            dt_sum = float(np.sum(rsdt))
+                            v_t = float(np.sum(voltage * rsdt) / dt_sum) if dt_sum > 0 else float(np.mean(voltage))
+
+                je = step_info["je_end"]
+                if je not in seen_je:
+                    seen_je.append(je)
+                    points.append({"i": je, "v": v_t})
+
+                # Collect V(t) for all frames in this step
+                if step_key not in vt_by_step:
+                    vt_by_step[step_key] = []
+                ramp_duration = step_info["ramp_end"] - step_info["ramp_start"]
+                step_duration = step_info["stable_end"] - step_info["ramp_start"]
+
+                for fi in indices:
+                    grp = data[str(fi)]
+                    fv = 0.0
+                    if "running_state" in grp:
+                        rs = grp["running_state"]
+                        if "mu" in rs and "dt" in rs:
+                            rsmu = rs["mu"][...].reshape(-1)
+                            rsdt = rs["dt"][...].reshape(-1)
+                            k = len(rsdt)
+                            if k > 0 and len(rsmu) >= 2 * k:
+                                voltage = np.asarray(rsmu[:k]) - np.asarray(rsmu[k:2 * k])
+                                dt_sum = float(np.sum(rsdt))
+                                fv = float(np.sum(voltage * rsdt) / dt_sum) if dt_sum > 0 else float(np.mean(voltage))
+
+                    # Approximate time: spread frames evenly
+                    n = len(indices)
+                    frac = indices.index(fi) / max(n - 1, 1) if n > 1 else 0.0
+                    abs_time = step_info["ramp_start"] + frac * step_duration
+                    vt_by_step[step_key].append([abs_time, fv])
+
+        except Exception:
+            continue
+
+    if not points:
+        return None
+
+    return {"points": points, "vt_by_step": vt_by_step}
+
+
 from dflow.python import OP, OPIO, OPIOSign
 
 
