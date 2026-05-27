@@ -242,6 +242,16 @@ def main():
         with open(device_path, "wb") as f:
             f.write(base64.b64decode(device_pickle_b64))
         _retry(lambda: _scp(device_path, f"{job_dir}/device.pkl", host))
+    else:
+        # Download device.pkl from MinIO (uploaded by pipeline.submit)
+        s3 = _get_minio_client()
+        device_path = os.path.join(tmp, "device.pkl")
+        try:
+            s3.download_file(bucket, f"tdgl-runs/{run_id}/device.pkl", device_path)
+            _retry(lambda: _scp(device_path, f"{job_dir}/device.pkl", host))
+            print("  Downloaded device.pkl from MinIO")
+        except Exception as e:
+            print(f"  Warning: could not download device.pkl from MinIO: {e}")
 
     if epsilon_params_b64:
         eps_path = os.path.join(tmp, "epsilon_params.json")

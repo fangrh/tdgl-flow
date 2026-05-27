@@ -5,6 +5,7 @@ which orchestrates a SLURM job on Triton with real-time sidecar sync.
 """
 import base64
 import json
+import os
 import pickle
 import time
 import uuid
@@ -58,8 +59,9 @@ class TritonSimulationPipeline:
     ) -> tuple[str, str]:
         """Submit a triton-tdgl-sim workflow. Returns (run_id, wf_name).
 
-        `device` is a tdgl.Device object (will be pickled and base64-encoded).
+        `device` is a tdgl.Device object (uploaded to MinIO, reference passed).
         """
+        import tempfile
         from hera.workflows import Workflow, Parameter
         from hera.workflows.models import WorkflowTemplateRef as WTR
 
@@ -68,9 +70,12 @@ class TritonSimulationPipeline:
             + "-" + uuid.uuid4().hex[:6]
         )
 
-        device_pickle_b64 = base64.b64encode(
-            pickle.dumps(device)
-        ).decode()
+        # Upload device.pkl to MinIO (too large for workflow parameters)
+        device_key = f"tdgl-runs/{run_id}/device.pkl"
+        device_path = os.path.join(tempfile.gettempdir(), f"device-{run_id}.pkl")
+        with open(device_path, "wb") as f:
+            pickle.dump(device, f)
+        self.store.s3.upload_file(device_path, self.store.bucket, device_key)
 
         timing_json_b64 = base64.b64encode(
             json.dumps(timing_params).encode()
@@ -92,7 +97,7 @@ class TritonSimulationPipeline:
             workflow_template_ref=WTR(name="triton-tdgl-sim"),
             arguments=[
                 Parameter(name="run-id", value=run_id),
-                Parameter(name="device-pickle-b64", value=device_pickle_b64),
+                Parameter(name="device-pickle-b64", value=""),
                 Parameter(name="timing-json-b64", value=timing_json_b64),
                 Parameter(name="solver-options-b64", value=solver_b64),
                 Parameter(name="epsilon-params-b64", value=eps_b64),
