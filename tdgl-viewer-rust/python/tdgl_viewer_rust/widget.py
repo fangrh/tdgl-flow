@@ -236,6 +236,8 @@ class TdglDiscreteViewer:
             _play_token[0] += 1
             self._stop_playback()
             _live_stop.set()
+            if _live_thread[0] and _live_thread[0].is_alive():
+                _live_thread[0].join(timeout=5.0)
             # Open new run
             try:
                 self.open(run_id=selected_id)
