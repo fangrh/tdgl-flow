@@ -12,7 +12,7 @@ Prerequisites:
 import sys
 sys.path.insert(0, "../src")
 
-from tdgl_sdk import TritonSimulationPipeline
+from tdgl_sdk import DFlowTritonPipeline
 from tdgl_workflow.mesh import build_rectangular_device
 from tdgl_workflow.timing import build_timing
 from tdgl_viewer_rust.widget import TdglViewer
@@ -53,8 +53,8 @@ SOLVER_OPTIONS = {
 EPSILON_PARAMS = {
     "type": "gaussian",
     "positions": [[0.0, y] for y in [-2.5, -1.25, 0.0, 1.25, 2.5]],
-    "widths": [[0.4, 0.4]] * 9,
-    "strengths": [0.9] * 9,
+    "widths": [[0.4, 0.4]] * 5,
+    "strengths": [0.9] * 5,
 }
 
 SBATCH_OPTIONS = {
@@ -91,11 +91,11 @@ print(f"Timing: {timing_data['n_steps']} steps, solve_time={timing_data['solve_t
 
 #%%
 # ── Submit to Triton ──────────────────────────────────────────────────────
-pipe = TritonSimulationPipeline(
+pipe = DFlowTritonPipeline(
     argo_url=ARGO_URL,
     minio_endpoint=MINIO_URL,
     sbatch_options=SBATCH_OPTIONS,
-    sidecar_interval=500,
+    sidecar_interval=5,
 )
 
 run_id, wf_name = pipe.submit(
