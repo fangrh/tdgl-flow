@@ -134,8 +134,21 @@ def main():
 
     steps = timing_data["steps"] + timing_data.get("ramp_down_steps", [])
     total_steps = len(steps)
+    solve_time = steps[-1]["stable_end"] if steps else 0.0
 
     print(f"Discrete run {args.run_id}: {total_steps} steps")
+
+    # Write initial discrete_index.json with solve_time
+    _update_discrete_index(
+        run_dir, -1, {"je_start": 0, "je_end": 0, "ramp_start": 0, "ramp_end": 0, "stable_end": 0},
+        "", total_steps, status="running",
+    )
+    idx_path = os.path.join(run_dir, "discrete_index.json")
+    with open(idx_path) as f:
+        idx = json.load(f)
+    idx["solve_time"] = solve_time
+    with open(idx_path, "w") as f:
+        json.dump(idx, f)
 
     prev_solution = None
 

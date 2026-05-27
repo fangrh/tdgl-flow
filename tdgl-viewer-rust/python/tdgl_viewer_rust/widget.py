@@ -67,8 +67,11 @@ class TdglDiscreteViewer:
             print("No frames available yet.")
             return
 
-        latest_t = self._rust.latest_frame_time()
-        solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
+        try:
+            solve_t = self._rust.solve_time()
+        except Exception:
+            latest_t = self._rust.latest_frame_time()
+            solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
 
         image = widgets.Image(format="png", width=FRAME_W)
         play_btn = widgets.Button(
@@ -166,8 +169,11 @@ class TdglDiscreteViewer:
                     n = self._rust.refresh_index()
                     _latest_frame[0] = n - 1
                     if n > 0:
-                        lt = self._rust.latest_frame_time()
-                        _solve_time[0] = lt * 1.1 if lt > 0 else 1.0
+                        try:
+                            _solve_time[0] = self._rust.solve_time()
+                        except Exception:
+                            lt = self._rust.latest_frame_time()
+                            _solve_time[0] = lt * 1.1 if lt > 0 else 1.0
                         time_slider.max = max(_solve_time[0], 0.1)
                     if n > _prev_total[0]:
                         with _cache_lock:
@@ -286,8 +292,11 @@ class TdglDiscreteViewer:
                 latest = self._rust.total_frames() - 1
                 current_frame = self._rust.time_to_frame(time_slider.value)
                 current_frame = min(current_frame, latest)
+                try:
+                    solve_t = self._rust.solve_time()
+                except Exception:
+                    solve_t = 1.0
                 latest_t = self._rust.latest_frame_time()
-                solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
 
                 if current_frame >= latest:
                     if latest_t < solve_t * 0.9:

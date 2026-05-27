@@ -1333,6 +1333,24 @@ impl TdglDiscreteViewer {
         Ok(index.frame_times[index.total_frames.saturating_sub(1)])
     }
 
+    fn solve_time(&self) -> PyResult<f64> {
+        let index = self
+            .index
+            .as_ref()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no run opened"))?;
+        let st = index.solve_time;
+        if st > 0.0 {
+            Ok(st)
+        } else {
+            // Fallback: use last frame time
+            if index.frame_times.is_empty() {
+                Ok(0.0)
+            } else {
+                Ok(index.frame_times[index.total_frames.saturating_sub(1)] * 1.1)
+            }
+        }
+    }
+
     fn refresh_index(&mut self) -> PyResult<usize> {
         let run_id = match &self.run_id {
             Some(id) => id.clone(),

@@ -305,6 +305,7 @@ def build_discrete_viewer_index(local_dir, run_id=None):
         "completed_steps": len(completed),
         "total_steps": dindex.get("total_steps", len(completed)),
         "status": dindex.get("status", "running"),
+        "solve_time": dindex.get("solve_time", 0.0),
         "discrete_mode": True,
         "run_id": run_id,
         "steps": step_indices,

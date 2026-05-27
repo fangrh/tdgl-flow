@@ -35,6 +35,8 @@ pub struct DiscreteIndex {
     pub completed_steps: usize,
     pub total_steps: usize,
     pub status: String,
+    #[serde(default)]
+    pub solve_time: f64,
     pub steps: Vec<DiscreteStepOffsets>,
     #[serde(default)]
     pub run_id: Option<String>,
