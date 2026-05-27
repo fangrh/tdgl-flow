@@ -1,5 +1,14 @@
 use crate::run_info::RunInfo;
 
+#[derive(Debug, Clone)]
+pub struct DiscreteRunSummary {
+    pub run_id: String,
+    pub status: String,
+    pub total_frames: u64,
+    pub total_steps: u64,
+    pub completed_steps: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ObjectInfo {
     pub content_length: Option<u64>,
@@ -41,6 +50,41 @@ impl MinioClient {
             }
         }
         runs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(runs)
+    }
+
+    pub fn list_discrete_runs(&self) -> Result<Vec<DiscreteRunSummary>, String> {
+        let url = format!(
+            "{}/{}?list-type=2&prefix=tdgl-runs/&delimiter=/",
+            self.endpoint, self.bucket
+        );
+        let resp = self.client.get(&url).send().map_err(|e| e.to_string())?;
+        let body = resp.text().map_err(|e| e.to_string())?;
+        let prefixes = extract_prefixes(&body);
+        let mut runs = Vec::new();
+        for prefix in prefixes {
+            let run_id = prefix
+                .trim_end_matches('/')
+                .trim_start_matches("tdgl-runs/")
+                .to_string();
+            let index_key = format!("tdgl-runs/{}/viewer-index.json", run_id);
+            if let Ok(Some(json_str)) = self.read_text_optional(&index_key) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    let discrete = val.get("discrete_mode").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if !discrete {
+                        continue;
+                    }
+                    runs.push(DiscreteRunSummary {
+                        run_id: run_id.clone(),
+                        status: val.get("status").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+                        total_frames: val.get("total_frames").and_then(|v| v.as_u64()).unwrap_or(0),
+                        total_steps: val.get("total_steps").and_then(|v| v.as_u64()).unwrap_or(0),
+                        completed_steps: val.get("completed_steps").and_then(|v| v.as_u64()).unwrap_or(0),
+                    });
+                }
+            }
+        }
+        runs.sort_by(|a, b| b.run_id.cmp(&a.run_id));
         Ok(runs)
     }
 
@@ -97,7 +141,23 @@ impl MinioClient {
             .header("Range", &range)
             .send()
             .map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if status.as_u16() == 416 {
+            return Err(format!(
+                "range {} not satisfiable (file too small for offset {})",
+                range, offset
+            ));
+        }
+        if !status.is_success() && status.as_u16() != 206 {
+            return Err(format!("GET {} range {} failed: {}", key, range, status));
+        }
         let bytes = resp.bytes().map_err(|e| e.to_string())?;
+        if bytes.len() as u64 != length {
+            return Err(format!(
+                "short read for range {}: expected {} bytes, got {}",
+                range, length, bytes.len()
+            ));
+        }
         Ok(bytes.to_vec())
     }
 

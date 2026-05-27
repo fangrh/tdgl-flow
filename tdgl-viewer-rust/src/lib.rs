@@ -1421,6 +1421,26 @@ impl TdglDiscreteViewer {
         self.buffer.clear();
     }
 
+    #[pyo3(signature = (refresh=false))]
+    fn list_discrete_runs(&mut self, refresh: bool) -> PyResult<Vec<String>> {
+        let runs = self.client.list_discrete_runs()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        let labels: Vec<String> = runs.iter().map(|r| {
+            let id = &r.run_id[..8.min(r.run_id.len())];
+            format!(
+                "{} | discrete | {}fr | {}/{} steps | {}",
+                id, r.total_frames, r.completed_steps, r.total_steps, r.status
+            )
+        }).collect();
+        Ok(labels)
+    }
+
+    fn get_discrete_run_ids(&mut self) -> PyResult<Vec<String>> {
+        let runs = self.client.list_discrete_runs()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        Ok(runs.iter().map(|r| r.run_id.clone()).collect())
+    }
+
     fn get_iv_progress(&self) -> PyResult<String> {
         let n = self.iv_points.len();
         let total = self.index.as_ref().map(|i| i.total_steps).unwrap_or(0);
