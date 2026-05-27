@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client rsync && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN pip install --no-cache-dir boto3
+RUN pip install --no-cache-dir boto3 numpy
 
 COPY services/triton-runner/runner.py /app/runner.py
 
