@@ -256,7 +256,7 @@ def main():
     if epsilon_params_b64:
         eps_path = os.path.join(tmp, "epsilon_params.json")
         with open(eps_path, "w") as f:
-            f.write(base64.b64decode(epsilon_params_b64).decode().encode())
+            f.write(base64.b64decode(epsilon_params_b64).decode())
         _retry(lambda: _scp(eps_path, f"{job_dir}/epsilon_params.json", host))
 
     # 2. Submit SLURM job
