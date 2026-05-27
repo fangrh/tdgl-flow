@@ -193,8 +193,20 @@ class DFlowTritonPipeline:
                     h5_files = sorted(f for f in os.listdir(local_dir) if f.startswith("je_") and f.endswith(".h5"))
                     for fname in h5_files:
                         local_path = os.path.join(local_dir, fname)
+                        local_size = os.path.getsize(local_path)
                         key = f"tdgl-runs/{{run_id}}/{{fname}}"
-                        if not minio_object_exists(endpoint, bucket, key):
+                        from tdgl_sdk.sidecar_sync import _get_minio_client
+                        need_upload = True
+                        try:
+                            s3 = _get_minio_client(endpoint)
+                            s3.head_object(Bucket=bucket, Key=key)
+                            meta = s3.head_object(Bucket=bucket, Key=key)
+                            remote_size = meta.get("ContentLength", 0)
+                            if remote_size == local_size:
+                                need_upload = False
+                        except Exception:
+                            pass
+                        if need_upload:
                             upload_to_minio(local_path, bucket, key, endpoint)
 
                     index = build_discrete_viewer_index(local_dir, run_id)
