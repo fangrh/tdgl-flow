@@ -1191,16 +1191,11 @@ impl TdglDiscreteViewer {
 
         let frame_time = self.frame_time(frame_idx);
 
-        // V-t data for this step (from pre-computed iv.json)
+        // V-t data for this step (from pre-computed iv.json), converted to relative time
         let vt_data: Option<Vec<(f64, f64)>> = current_step.and_then(|si| {
-            // Map step_list_idx to the discrete_index step_idx
-            // vt_by_step keys are absolute step indices
-            let abs_step = index.steps.get(si)?.je_end;
-            // Try to match by looking at step_list_idx as key
-            // The vt_by_step uses absolute step_idx from discrete_index
-            // We need to find the right key
             if let Some(vt) = self.vt_by_step.get(&si) {
-                Some(vt.clone())
+                let ramp_start = index.steps.get(si)?.ramp_start;
+                Some(vt.iter().map(|(t, v)| (t - ramp_start, *v)).collect())
             } else {
                 None
             }
