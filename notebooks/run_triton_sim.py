@@ -9,12 +9,10 @@ Prerequisites:
 """
 
 #%%
-import json
 import sys
 sys.path.insert(0, "../src")
 
 from tdgl_sdk import TritonSimulationPipeline
-from tdgl_sdk.client import TDGLRunStore
 from tdgl_workflow.mesh import build_rectangular_device
 from tdgl_workflow.timing import build_timing
 from tdgl_viewer_rust.widget import TdglViewer
@@ -25,10 +23,10 @@ ARGO_URL = "http://localhost:30080"
 #%%
 # ── Simulation parameters ─────────────────────────────────────────────────
 DEVICE_PARAMS = {
-    "film_width": 32.0,
-    "film_height": 10.0,
+    "film_width": 10.0,
+    "film_height": 5.0,
     "elec_width": 0.2,
-    "elec_height": 10.1,
+    "elec_height": 5.1,
     "elec_y_offset": 0.0,
     "probe_points": [[-3, 0], [3, 0]],
     "max_edge_length": 0.25,
@@ -38,11 +36,11 @@ DEVICE_PARAMS = {
 TIMING_PARAMS = {
     "mode": "simple",
     "je_initial": 0.0,
-    "je_final": 5.0,
-    "je_step": 0.5,
+    "je_final": 25.0,
+    "je_step": 0.2,
     "ramp_time": 100.0,
     "stable_time": 200.0,
-    "ramp_down": False,
+    "ramp_down": True,
 }
 
 SOLVER_OPTIONS = {
@@ -54,7 +52,7 @@ SOLVER_OPTIONS = {
 
 EPSILON_PARAMS = {
     "type": "gaussian",
-    "positions": [[0.0, y] for y in [-5, -3.75, -2.5, -1.25, 0.0, 1.25, 2.5, 3.75, 5]],
+    "positions": [[0.0, y] for y in [-2.5, -1.25, 0.0, 1.25, 2.5]],
     "widths": [[0.4, 0.4]] * 9,
     "strengths": [0.9] * 9,
 }
@@ -68,12 +66,13 @@ SBATCH_OPTIONS = {
 
 #%%
 # ── Build device ──────────────────────────────────────────────────────────
-device = build_rectangular_device(
+_mesh_meta, device = build_rectangular_device(
     film_width=DEVICE_PARAMS["film_width"],
     film_height=DEVICE_PARAMS["film_height"],
     elec_width=DEVICE_PARAMS["elec_width"],
     elec_height=DEVICE_PARAMS["elec_height"],
     elec_y_offset=DEVICE_PARAMS["elec_y_offset"],
+    probe_points=DEVICE_PARAMS["probe_points"],
     max_edge_length=DEVICE_PARAMS["max_edge_length"],
     smooth=DEVICE_PARAMS["smooth"],
 )
