@@ -10,5 +10,5 @@ SIDE_CAR_INTERVAL="${2:-500}"
 source /scratch/work/fangr1/miniforge3/etc/profile.d/conda.sh
 conda activate tdgl
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="/scratch/work/fangr1/tdgl-runner"
 python "$SCRIPT_DIR/slurm_runner.py" "$RUN_ID" --sidecar-interval "$SIDE_CAR_INTERVAL"
