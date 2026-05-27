@@ -125,28 +125,15 @@ viewer = TdglDiscreteViewer(
     debug=True,
 )
 
-print(f"Run: {run_id}")
-while True:
-    try:
-        viewer.open(run_id=run_id)
-        print(f"  {viewer.total_frames()} frames loaded")
-        break
-    except Exception:
-        try:
-            r = httpx.get(
-                f"{ARGO_URL}/api/v1/workflows/tdgl/{wf_name}",
-                verify=False, timeout=5,
-            )
-            phase = (r.json().get("status") or {}).get("phase", "Unknown")
-            if phase in ("Failed", "Error"):
-                print(f"  Workflow {phase}")
-                raise SystemExit(1)
-            print(f"\r  [{phase}] waiting for data...", end="", flush=True)
-        except SystemExit:
-            raise
-        except Exception:
-            print(f"\r  waiting for data...", end="", flush=True)
-    time.sleep(3)
+# Try to open the submitted run; if data isn't ready yet, the dropdown
+# will show all available runs and live-refresh will pick it up once
+# the sync pod starts uploading.
+print(f"Submitted run: {run_id}")
+try:
+    viewer.open(run_id=run_id)
+    print(f"  {viewer.total_frames()} frames loaded")
+except Exception:
+    print("  Data not yet available — viewer will show in dropdown once ready")
 
 viewer.display()
 
