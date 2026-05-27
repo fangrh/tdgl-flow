@@ -1,17 +1,18 @@
 """SLURM job runner for py-tdgl simulations on Triton.
 
 Runs inside a SLURM compute job. Reads device.pkl + timing.json from
-jobs/{run_id}/, runs the tdgl solver, writes sidecar frames to
-jobs/{run_id}/sidecars/ every N steps, and produces the final HDF5.
+jobs/{run_id}/, runs the tdgl solver in a background thread, while a
+sidecar thread polls the growing HDF5 and extracts frames to .npz files.
 
 Usage:
-    python slurm_runner.py <run_id> [--sidecar-interval 500]
+    python slurm_runner.py <run_id> [--sidecar-interval 10]
 """
 import argparse
 import json
 import os
 import pickle
 import sys
+import threading
 import time
 
 import h5py
@@ -54,61 +55,87 @@ def _write_index(sidecar_dir, total_frames, completed_steps, total_steps, status
         json.dump(index, f)
 
 
-class SidecarCallback:
-    """tdgl solve callback that writes sidecar .npz files every N steps."""
+def _count_hdf5_frames(output_path):
+    """Count the number of frames currently in the HDF5 output."""
+    try:
+        with h5py.File(output_path, "r") as f:
+            if "data" not in f:
+                return 0
+            return sum(1 for name in f["data"] if name.isdigit())
+    except Exception:
+        return 0
 
-    def __init__(self, sidecar_dir, interval, total_steps):
-        self.sidecar_dir = sidecar_dir
-        self.interval = interval
-        self.total_steps = total_steps
-        self.frame_count = 0
-        self.steps_since_last = 0
-        os.makedirs(sidecar_dir, exist_ok=True)
 
-    def __call__(self, solution, step, time_val):
-        self.steps_since_last += 1
-        if self.steps_since_last < self.interval:
-            return
-        self.steps_since_last = 0
-        self._write_frame(solution, step, time_val)
+def _extract_sidecar(output_path, frame_idx, sidecar_dir, steps, frame_count):
+    """Extract a single frame from HDF5 and write as .npz sidecar."""
+    try:
+        with h5py.File(output_path, "r") as f:
+            data = f["data"]
+            key = str(frame_idx)
+            if key not in data:
+                return frame_count
+            group = data[key]
 
-    def _write_frame(self, solution, step, time_val):
-        psi = solution.psi
-        mu = solution.mu if hasattr(solution, "mu") and solution.mu is not None else np.zeros_like(psi, dtype=float)
+            psi = np.array(group["psi"])
+            mu = np.array(group["mu"]) if "mu" in group else np.zeros_like(psi, dtype=float)
 
-        v_t = 0.0
-        i_t = 0.0
-        if hasattr(solution, "terminal_currents") and solution.terminal_currents:
-            i_t = solution.terminal_currents.get("source", 0.0)
-        if hasattr(solution, "voltage") and solution.voltage is not None:
-            v_t = float(solution.voltage)
+            v_t = 0.0
+            i_t = 0.0
+            if "running_state" in group:
+                rs = group["running_state"]
+                if "mu" in rs and "dt" in rs:
+                    rsmu = rs["mu"][...].reshape(-1)
+                    rsdt = rs["dt"][...].reshape(-1)
+                    k = len(rsdt)
+                    if k > 0 and len(rsmu) >= 2 * k:
+                        voltage = np.asarray(rsmu[:k]) - np.asarray(rsmu[k:2 * k])
+                        dt_sum = float(np.sum(rsdt))
+                        v_t = float(np.sum(voltage * rsdt) / dt_sum) if dt_sum > 0 else float(np.mean(voltage))
 
-        frame_path = os.path.join(
-            self.sidecar_dir, f"frame_{self.frame_count:06d}.npz"
-        )
-        np.savez_compressed(
-            frame_path,
-            psi=psi,
-            mu=mu,
-            V_t=np.float64(v_t),
-            I_t=np.float64(i_t),
-            step=np.int64(step),
-            time=np.float64(time_val),
-        )
-        self.frame_count += 1
-        _write_index(
-            self.sidecar_dir,
-            self.frame_count,
-            step,
-            self.total_steps,
-            "running",
-        )
+            step_val = frame_idx
+            time_val = 0.0
+            if hasattr(group, "attrs"):
+                time_val = float(group.attrs.get("time", 0.0))
+
+            for s in steps:
+                if time_val >= s["ramp_start"] and time_val <= s["stable_end"]:
+                    i_t = float(s["je_end"])
+
+            frame_path = os.path.join(sidecar_dir, f"frame_{frame_count:06d}.npz")
+            np.savez_compressed(
+                frame_path,
+                psi=psi,
+                mu=mu,
+                V_t=np.float64(v_t),
+                I_t=np.float64(i_t),
+                step=np.int64(step_val),
+                time=np.float64(time_val),
+            )
+            return frame_count + 1
+    except Exception:
+        return frame_count
+
+
+def _sidecar_poller(output_path, sidecar_dir, total_steps, stop_event, interval=10):
+    """Background thread: poll HDF5 for new frames and write sidecars."""
+    frame_count = 0
+    last_seen = 0
+    while not stop_event.is_set():
+        current = _count_hdf5_frames(output_path)
+        if current > last_seen:
+            for idx in range(last_seen, current):
+                frame_count = _extract_sidecar(
+                    output_path, idx, sidecar_dir, [], frame_count
+                )
+            last_seen = current
+            _write_index(sidecar_dir, frame_count, last_seen, total_steps, "running")
+        stop_event.wait(interval)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("run_id")
-    parser.add_argument("--sidecar-interval", type=int, default=500)
+    parser.add_argument("--sidecar-interval", type=int, default=10)
     args = parser.parse_args()
 
     run_dir = os.path.join(os.path.dirname(__file__), "jobs", args.run_id)
@@ -148,8 +175,16 @@ def main():
         output_file=output_path,
     )
 
-    sidecar_cb = SidecarCallback(sidecar_dir, args.sidecar_interval, total_steps)
     _write_index(sidecar_dir, 0, 0, total_steps, "running")
+
+    # Start sidecar poller thread
+    stop_event = threading.Event()
+    poller = threading.Thread(
+        target=_sidecar_poller,
+        args=(output_path, sidecar_dir, total_steps, stop_event, args.sidecar_interval),
+        daemon=True,
+    )
+    poller.start()
 
     try:
         solve_kwargs = dict(
@@ -161,22 +196,23 @@ def main():
             solve_kwargs["disorder_epsilon"] = epsilon_fn
         solution = tdgl.solve(**solve_kwargs)
 
-        _write_index(
-            sidecar_dir,
-            sidecar_cb.frame_count,
-            total_steps,
-            total_steps,
-            "completed",
-        )
-        print(f"Run {args.run_id} completed. {sidecar_cb.frame_count} sidecar frames.")
+        # Stop poller, do final frame extraction
+        stop_event.set()
+        poller.join(timeout=30)
+
+        final_count = _count_hdf5_frames(output_path)
+        frame_count = 0
+        for idx in range(final_count):
+            frame_count = _extract_sidecar(
+                output_path, idx, sidecar_dir, steps, frame_count
+            )
+
+        _write_index(sidecar_dir, frame_count, final_count, total_steps, "completed")
+        print(f"Run {args.run_id} completed. {frame_count} sidecar frames, {final_count} HDF5 frames.")
     except Exception as exc:
-        _write_index(
-            sidecar_dir,
-            sidecar_cb.frame_count,
-            sidecar_cb.steps_since_last,
-            total_steps,
-            "failed",
-        )
+        stop_event.set()
+        poller.join(timeout=10)
+        _write_index(sidecar_dir, 0, 0, total_steps, "failed")
         print(f"Run {args.run_id} failed: {exc}", file=sys.stderr)
         raise
 
