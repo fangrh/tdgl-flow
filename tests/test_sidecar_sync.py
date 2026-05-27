@@ -107,3 +107,21 @@ class TestUploadToMinio:
         assert "local_path" in params
         assert "bucket" in params
         assert "key" in params
+
+
+class TestSidecarSyncOP:
+    def test_op_class_exists_and_has_required_methods(self):
+        from tdgl_sdk.sidecar_sync import SidecarSyncOP
+        assert hasattr(SidecarSyncOP, "get_input_sign")
+        assert hasattr(SidecarSyncOP, "get_output_sign")
+        assert hasattr(SidecarSyncOP, "execute")
+
+    def test_input_sign_has_run_id(self):
+        from tdgl_sdk.sidecar_sync import SidecarSyncOP
+        sign = SidecarSyncOP.get_input_sign()
+        assert "run_id" in sign
+
+    def test_output_sign_has_status(self):
+        from tdgl_sdk.sidecar_sync import SidecarSyncOP
+        sign = SidecarSyncOP.get_output_sign()
+        assert "status" in sign

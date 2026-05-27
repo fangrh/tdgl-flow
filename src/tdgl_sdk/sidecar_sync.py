@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 
 import boto3
 import numpy as np
@@ -135,3 +136,79 @@ def build_iv_data(local_dir):
         vt_by_step[step_key].append([t, v_t])
 
     return {"points": points, "vt_by_step": vt_by_step}
+
+
+class SidecarSyncOP:
+    """DFlow OP that syncs sidecar frames from Triton to MinIO.
+
+    Runs as a K8s pod in parallel with the simulation step. Loops:
+    rsync from Triton -> upload to MinIO -> check completion -> repeat.
+    """
+
+    @classmethod
+    def get_input_sign(cls):
+        return {"run_id": str}
+
+    @classmethod
+    def get_output_sign(cls):
+        return {"status": str}
+
+    def execute(self, op_in):
+        run_id = op_in["run_id"]
+        remote_dir = f"/scratch/work/fangr1/tdgl-runner/jobs/{run_id}/sidecars"
+        local_dir = f"/tmp/triton-{run_id}/sidecars"
+        ssh_key = os.environ.get("SSH_KEY_PATH", "/root/.ssh/id_rsa")
+        host = os.environ.get("TRITON_HOST", "fangr1@code.triton.aalto.fi")
+        bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
+        endpoint = os.environ.get(
+            "MINIO_ENDPOINT", "http://minio.tdgl.svc.cluster.local:9000"
+        )
+        timeout = int(os.environ.get("SYNC_TIMEOUT", "14400"))
+
+        start_time = time.time()
+
+        while True:
+            if time.time() - start_time > timeout:
+                return {"status": "timeout"}
+
+            try:
+                rsync_sidecars(remote_dir, local_dir, ssh_key, host)
+                frames = sorted(
+                    f for f in os.listdir(local_dir)
+                    if f.startswith("frame_") and f.endswith(".npz")
+                )
+
+                if frames:
+                    for fname in frames:
+                        local_path = os.path.join(local_dir, fname)
+                        key = f"tdgl-runs/{run_id}/sidecars/{fname}"
+                        if not minio_object_exists(endpoint, bucket, key):
+                            upload_to_minio(local_path, bucket, key, endpoint)
+
+                    index = build_viewer_index(local_dir, run_id)
+                    if index:
+                        upload_json_to_minio(
+                            index, bucket,
+                            f"tdgl-runs/{run_id}/viewer-index.json",
+                            endpoint,
+                        )
+
+                    iv = build_iv_data(local_dir)
+                    if iv:
+                        upload_json_to_minio(
+                            iv, bucket,
+                            f"tdgl-runs/{run_id}/iv.json",
+                            endpoint,
+                        )
+
+                index_path = os.path.join(local_dir, "index.json")
+                if os.path.exists(index_path):
+                    with open(index_path) as f:
+                        status = json.load(f).get("status", "running")
+                    if status in ("completed", "failed"):
+                        return {"status": status}
+
+            except Exception as e:
+                print(f"sidecar-sync error (will retry): {e}")
+
+            time.sleep(5)
