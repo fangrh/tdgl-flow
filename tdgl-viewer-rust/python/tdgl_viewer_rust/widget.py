@@ -13,7 +13,7 @@ PREFETCH_AHEAD = 8
 
 
 class TdglDiscreteViewer:
-    """Interactive 2x2 TDGL discrete viewer with time-based slider and live refresh."""
+    """Interactive 2x2 TDGL discrete viewer with run dropdown, time-based slider and live refresh."""
 
     def __init__(
         self,
@@ -56,15 +56,36 @@ class TdglDiscreteViewer:
         self._rust.set_show_vt_dot(self._show_vt_dot)
 
     def display(self):
-        """Display interactive viewer in Jupyter with time-based slider."""
-        if self._run_id is None:
-            print("No run opened. Call open(run_id=...) first.")
-            return
+        """Display interactive viewer with run dropdown, playback controls, and live refresh."""
         self._rust.set_show_vt_dot(self._show_vt_dot)
 
+        # ── Run selection ──────────────────────────────────────────────
+        try:
+            run_labels = self._rust.list_discrete_runs(False)
+            run_ids = self._rust.get_discrete_run_ids()
+        except Exception:
+            run_labels = []
+            run_ids = []
+
+        if self._run_id and self._run_id not in run_ids:
+            run_ids.insert(0, self._run_id)
+            run_labels.insert(0, f"{self._run_id[:8]} (current)")
+
+        run_dropdown = widgets.Dropdown(
+            options=[(label, rid) for label, rid in zip(run_labels, run_ids)],
+            description="Run:",
+            layout=widgets.Layout(width="clamp(400px, 60vw, 800px)"),
+        )
+        if self._run_id and self._run_id in run_ids:
+            run_dropdown.value = self._run_id
+
+        # ── Open run if needed ─────────────────────────────────────────
+        if self._run_id is None and run_ids:
+            self.open(run_id=run_ids[0])
+
         total = self._rust.total_frames()
-        if total == 0:
-            print("No frames available yet.")
+        if total == 0 and not run_ids:
+            print("No discrete runs found.")
             return
 
         try:
@@ -73,6 +94,7 @@ class TdglDiscreteViewer:
             latest_t = self._rust.latest_frame_time()
             solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
 
+        # ── Widgets ────────────────────────────────────────────────────
         image = widgets.Image(format="png", width=FRAME_W)
         play_btn = widgets.Button(
             description="Play", icon="play",
@@ -108,15 +130,17 @@ class TdglDiscreteViewer:
             style={"description_width": "70px"},
             layout=widgets.Layout(width="120px"),
         )
-        status = widgets.Label(value=f"frame 0/{total - 1}")
+        status = widgets.Label(value=f"frame 0/{max(total - 1, 0)}")
 
+        # ── State ──────────────────────────────────────────────────────
         _cache = {}
         _cache_lock = threading.Lock()
         _current_frame = [0]
         _render_token = [0]
         _play_token = [0]
         _suppress_slider = [False]
-        _latest_frame = [total - 1]
+        _suppress_dropdown = [False]
+        _latest_frame = [max(total - 1, 0)]
         _solve_time = [solve_t]
         _live_stop = threading.Event()
         _live_thread = [None]
@@ -125,25 +149,27 @@ class TdglDiscreteViewer:
             f = self._rust.time_to_frame(t)
             return min(f, _latest_frame[0])
 
-        def _render(frame_idx):
+        def _render(frame_idx, update_slider=True):
             frame_idx = max(0, min(frame_idx, _latest_frame[0]))
             _current_frame[0] = frame_idx
             _render_token[0] += 1
             ft = self._rust.frame_time_at(frame_idx)
             t_val = ft if ft is not None else 0.0
-            if abs(time_slider.value - t_val) > 0.05:
+            if update_slider and abs(time_slider.value - t_val) > 0.05:
                 _suppress_slider[0] = True
                 time_slider.value = t_val
                 _suppress_slider[0] = False
             time_label.value = f"t={t_val:.1f} / {_solve_time[0]:.1f}"
-            total = self._rust.total_frames()
-            status.value = f"frame {frame_idx}/{total - 1}"
+            n = self._rust.total_frames()
+            status.value = f"frame {frame_idx}/{n - 1}"
 
             with _cache_lock:
                 png = _cache.get(frame_idx)
             if png is not None:
                 image.value = png
                 return
+
+            status.value = f"frame {frame_idx}/{n - 1} (loading...)"
 
             def _render_worker(fi, rt):
                 try:
@@ -154,8 +180,8 @@ class TdglDiscreteViewer:
                     _cache[fi] = png
                 if _render_token[0] == rt and _current_frame[0] == fi:
                     image.value = png
-                    total = self._rust.total_frames()
-                    status.value = f"frame {fi}/{total - 1}"
+                    n = self._rust.total_frames()
+                    status.value = f"frame {fi}/{n - 1}"
 
             threading.Thread(target=_render_worker, args=(frame_idx, _render_token[0]), daemon=True).start()
 
@@ -180,6 +206,17 @@ class TdglDiscreteViewer:
                             _cache.clear()
                         _prev_total[0] = n
                         _render(_current_frame[0])
+                    # Refresh run list periodically
+                    try:
+                        _suppress_dropdown[0] = True
+                        new_labels = self._rust.list_discrete_runs(True)
+                        new_ids = self._rust.get_discrete_run_ids()
+                        run_dropdown.options = [(l, rid) for l, rid in zip(new_labels, new_ids)]
+                        if self._run_id in new_ids:
+                            run_dropdown.value = self._run_id
+                        _suppress_dropdown[0] = False
+                    except Exception:
+                        _suppress_dropdown[0] = False
                 except Exception as e:
                     if self._debug:
                         print(f"[discrete-viewer-debug] refresh error: {e}")
@@ -189,6 +226,41 @@ class TdglDiscreteViewer:
         t.start()
         _live_thread[0] = t
 
+        def on_dropdown(change):
+            if _suppress_dropdown[0]:
+                return
+            selected_id = change["new"]
+            if selected_id == self._run_id:
+                return
+            # Stop playback
+            _play_token[0] += 1
+            self._stop_playback()
+            _live_stop.set()
+            # Open new run
+            try:
+                self.open(run_id=selected_id)
+            except Exception as e:
+                status.value = f"Error: {e}"
+                return
+            # Reset UI state
+            total = self._rust.total_frames()
+            try:
+                st = self._rust.solve_time()
+            except Exception:
+                st = 1.0
+            _solve_time[0] = st
+            _latest_frame[0] = max(total - 1, 0)
+            time_slider.max = max(st, 0.1)
+            time_slider.value = 0.0
+            with _cache_lock:
+                _cache.clear()
+            _render(0)
+            # Restart live refresh
+            _live_stop.clear()
+            t = threading.Thread(target=_live_refresh, daemon=True)
+            t.start()
+            _live_thread[0] = t
+
         def on_time_slider(change):
             if _suppress_slider[0]:
                 return
@@ -197,7 +269,7 @@ class TdglDiscreteViewer:
                 _play_token[0] += 1
             t_val = change["new"]
             frame_idx = _time_to_frame(t_val)
-            _render(frame_idx)
+            _render(frame_idx, update_slider=False)
             if was_playing:
                 self._start_playback(
                     time_slider, image, time_label, status, play_btn,
@@ -230,6 +302,7 @@ class TdglDiscreteViewer:
         def on_refresh(change):
             self._refresh_interval = max(1.0, float(change["new"]))
 
+        run_dropdown.observe(on_dropdown, names="value")
         time_slider.observe(on_time_slider, names="value")
         play_btn.on_click(on_play)
         fps_slider.observe(on_fps, names="value")
@@ -237,9 +310,11 @@ class TdglDiscreteViewer:
         vt_dot_check.observe(on_vt_dot, names="value")
         refresh_input.observe(on_refresh, names="value")
 
-        _render(0)
+        if total > 0:
+            _render(0)
 
         ui = widgets.VBox([
+            run_dropdown,
             widgets.HBox([play_btn, time_slider, time_label]),
             widgets.HBox(
                 [fps_slider, speed_input, vt_dot_check, refresh_input, status],
@@ -303,7 +378,25 @@ class TdglDiscreteViewer:
                         self._stop.wait(1.0)
                         continue
                     if prev_frame != latest:
-                        image.value = self._rust.render_frame(latest)
+                        _render_done = threading.Event()
+                        _render_result = [None]
+
+                        def _do_render(fi):
+                            try:
+                                _render_result[0] = self._rust.render_frame(fi)
+                            except Exception:
+                                pass
+                            _render_done.set()
+
+                        threading.Thread(target=_do_render, args=(latest,), daemon=True).start()
+                        while not _render_done.is_set() and not self._stop.is_set():
+                            self._stop.wait(0.1)
+                        if self._stop.is_set():
+                            break
+                        png = _render_result[0]
+                        if png is None:
+                            break
+                        image.value = png
                         ft = self._rust.frame_time_at(latest)
                         t_val = ft if ft is not None else 0.0
                         suppress_slider[0] = True
@@ -327,9 +420,23 @@ class TdglDiscreteViewer:
                     png = cache.get(next_frame)
 
                 if png is None:
-                    try:
-                        png = self._rust.render_frame(next_frame)
-                    except Exception:
+                    _render_done = threading.Event()
+                    _render_result = [None]
+
+                    def _do_render(fi):
+                        try:
+                            _render_result[0] = self._rust.render_frame(fi)
+                        except Exception:
+                            pass
+                        _render_done.set()
+
+                    threading.Thread(target=_do_render, args=(next_frame,), daemon=True).start()
+                    while not _render_done.is_set() and not self._stop.is_set():
+                        self._stop.wait(0.1)
+                    if self._stop.is_set():
+                        break
+                    png = _render_result[0]
+                    if png is None:
                         self._stop.wait(1.0)
                         continue
                     if play_token[0] != token or self._stop.is_set():
@@ -352,7 +459,10 @@ class TdglDiscreteViewer:
 
                 elapsed = 0.001
                 remaining = max(0.0, interval - elapsed)
-                self._stop.wait(remaining)
+                while remaining > 0 and not self._stop.is_set():
+                    chunk = min(remaining, 0.1)
+                    self._stop.wait(chunk)
+                    remaining -= chunk
         finally:
             if play_token[0] == token:
                 self._playing = False
