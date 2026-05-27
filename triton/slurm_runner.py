@@ -1,8 +1,9 @@
 """SLURM job runner for py-tdgl simulations on Triton.
 
 Runs inside a SLURM compute job. Reads device.pkl + timing.json from
-jobs/{run_id}/, runs the tdgl solver in a background thread, while a
-sidecar thread polls the growing HDF5 and extracts frames to .npz files.
+jobs/{run_id}/, runs the tdgl solver. A background thread monitors the
+growing HDF5 file size for progress. After completion, extracts sidecar
+frames from the final HDF5.
 
 Usage:
     python slurm_runner.py <run_id> [--sidecar-interval 10]
@@ -55,27 +56,32 @@ def _write_index(sidecar_dir, total_frames, completed_steps, total_steps, status
         json.dump(index, f)
 
 
-def _count_hdf5_frames(output_path):
-    """Count the number of frames currently in the HDF5 output."""
-    try:
-        with h5py.File(output_path, "r") as f:
-            if "data" not in f:
-                return 0
-            return sum(1 for name in f["data"] if name.isdigit())
-    except Exception:
-        return 0
+def _progress_poller(output_path, sidecar_dir, total_steps, stop_event, interval=10):
+    """Background thread: monitor HDF5 file size for progress estimation."""
+    last_size = 0
+    while not stop_event.is_set():
+        try:
+            size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            if size > last_size:
+                last_size = size
+                estimated_steps = min(total_steps, int(total_steps * min(1.0, size / max(1, total_steps * 500))))
+                _write_index(sidecar_dir, 0, estimated_steps, total_steps, "running")
+        except OSError:
+            pass
+        stop_event.wait(interval)
 
 
-def _extract_sidecar(output_path, frame_idx, sidecar_dir, steps, frame_count):
-    """Extract a single frame from HDF5 and write as .npz sidecar."""
-    try:
-        with h5py.File(output_path, "r") as f:
-            data = f["data"]
-            key = str(frame_idx)
-            if key not in data:
-                return frame_count
-            group = data[key]
+def _extract_sidecars_final(output_path, sidecar_dir, steps):
+    """Extract all frames from the completed HDF5 and write sidecars."""
+    frame_count = 0
+    with h5py.File(output_path, "r") as f:
+        if "data" not in f:
+            return 0
+        data = f["data"]
+        frame_indices = sorted(int(k) for k in data.keys() if k.isdigit())
 
+        for fi in frame_indices:
+            group = data[str(fi)]
             psi = np.array(group["psi"])
             mu = np.array(group["mu"]) if "mu" in group else np.zeros_like(psi, dtype=float)
 
@@ -92,14 +98,15 @@ def _extract_sidecar(output_path, frame_idx, sidecar_dir, steps, frame_count):
                         dt_sum = float(np.sum(rsdt))
                         v_t = float(np.sum(voltage * rsdt) / dt_sum) if dt_sum > 0 else float(np.mean(voltage))
 
-            step_val = frame_idx
             time_val = 0.0
-            if hasattr(group, "attrs"):
-                time_val = float(group.attrs.get("time", 0.0))
-
             for s in steps:
-                if time_val >= s["ramp_start"] and time_val <= s["stable_end"]:
-                    i_t = float(s["je_end"])
+                if "ramp_start" in s:
+                    t_start = float(s["ramp_start"])
+                    t_end = float(s["stable_end"])
+                    mid = (t_start + t_end) / 2
+                    if time_val < mid:
+                        i_t = float(s.get("je_end", 0.0))
+                        break
 
             frame_path = os.path.join(sidecar_dir, f"frame_{frame_count:06d}.npz")
             np.savez_compressed(
@@ -108,28 +115,12 @@ def _extract_sidecar(output_path, frame_idx, sidecar_dir, steps, frame_count):
                 mu=mu,
                 V_t=np.float64(v_t),
                 I_t=np.float64(i_t),
-                step=np.int64(step_val),
+                step=np.int64(fi),
                 time=np.float64(time_val),
             )
-            return frame_count + 1
-    except Exception:
-        return frame_count
+            frame_count += 1
 
-
-def _sidecar_poller(output_path, sidecar_dir, total_steps, stop_event, interval=10):
-    """Background thread: poll HDF5 for new frames and write sidecars."""
-    frame_count = 0
-    last_seen = 0
-    while not stop_event.is_set():
-        current = _count_hdf5_frames(output_path)
-        if current > last_seen:
-            for idx in range(last_seen, current):
-                frame_count = _extract_sidecar(
-                    output_path, idx, sidecar_dir, [], frame_count
-                )
-            last_seen = current
-            _write_index(sidecar_dir, frame_count, last_seen, total_steps, "running")
-        stop_event.wait(interval)
+    return frame_count
 
 
 def main():
@@ -177,10 +168,10 @@ def main():
 
     _write_index(sidecar_dir, 0, 0, total_steps, "running")
 
-    # Start sidecar poller thread
+    # Start progress monitor thread
     stop_event = threading.Event()
     poller = threading.Thread(
-        target=_sidecar_poller,
+        target=_progress_poller,
         args=(output_path, sidecar_dir, total_steps, stop_event, args.sidecar_interval),
         daemon=True,
     )
@@ -194,21 +185,17 @@ def main():
         )
         if epsilon_fn is not None:
             solve_kwargs["disorder_epsilon"] = epsilon_fn
+        print(f"Starting tdgl.solve() — solve_time={timing_data['solve_time']}, {total_steps} estimated steps")
         solution = tdgl.solve(**solve_kwargs)
 
-        # Stop poller, do final frame extraction
         stop_event.set()
         poller.join(timeout=30)
 
-        final_count = _count_hdf5_frames(output_path)
-        frame_count = 0
-        for idx in range(final_count):
-            frame_count = _extract_sidecar(
-                output_path, idx, sidecar_dir, steps, frame_count
-            )
-
-        _write_index(sidecar_dir, frame_count, final_count, total_steps, "completed")
-        print(f"Run {args.run_id} completed. {frame_count} sidecar frames, {final_count} HDF5 frames.")
+        # Extract sidecars from final HDF5
+        print("Extracting sidecar frames from completed HDF5...")
+        frame_count = _extract_sidecars_final(output_path, sidecar_dir, steps)
+        _write_index(sidecar_dir, frame_count, total_steps, total_steps, "completed")
+        print(f"Run {args.run_id} completed. {frame_count} sidecar frames extracted.")
     except Exception as exc:
         stop_event.set()
         poller.join(timeout=10)
