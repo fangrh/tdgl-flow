@@ -13,14 +13,20 @@ import time
 
 # --- SSH helpers ---
 
+_SSH_KEY = os.environ.get("SSH_KEY_PATH", "/root/.ssh/id_rsa")
+_SSH_OPTS = [
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "ConnectTimeout=10",
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=3",
+    "-o", "UserKnownHostsFile=/dev/null",
+]
+
+
 def _ssh(cmd, host, timeout=30, check=True):
     """Run a command on Triton via SSH. Returns CompletedProcess."""
     result = subprocess.run(
-        ["ssh", "-o", "StrictHostKeyChecking=no",
-         "-o", "ConnectTimeout=10",
-         "-o", "ServerAliveInterval=30",
-         "-o", "ServerAliveCountMax=3",
-         host, cmd],
+        ["ssh", "-i", _SSH_KEY, *_SSH_OPTS, host, cmd],
         capture_output=True, text=True, timeout=timeout, check=False,
     )
     if check and result.returncode != 0:
@@ -31,8 +37,7 @@ def _ssh(cmd, host, timeout=30, check=True):
 def _scp(local_path, remote_path, host):
     """Upload a file to Triton via scp."""
     subprocess.run(
-        ["scp", "-o", "StrictHostKeyChecking=no",
-         "-o", "ConnectTimeout=10",
+        ["scp", "-i", _SSH_KEY, *_SSH_OPTS,
          local_path, f"{host}:{remote_path}"],
         capture_output=True, text=True, timeout=60, check=True,
     )
@@ -42,7 +47,7 @@ def _rsync_sidecars(remote_sidecar_dir, local_sidecar_dir, host):
     """Rsync only new sidecar files from Triton. Returns list of new files."""
     os.makedirs(local_sidecar_dir, exist_ok=True)
     result = subprocess.run(
-        ["rsync", "-az",
+        ["rsync", "-az", "-e", f"ssh -i {_SSH_KEY} {' '.join(_SSH_OPTS)}",
          "--include=sidecars/***",
          "--include=sidecars/",
          "--exclude=*",
@@ -329,7 +334,7 @@ def main():
 
     # Rsync main HDF5
     subprocess.run(
-        ["rsync", "-az",
+        ["rsync", "-az", "-e", f"ssh -i {_SSH_KEY} {' '.join(_SSH_OPTS)}",
          f"{host}:{job_dir}/output.h5",
          f"{local_base}/output.h5"],
         capture_output=True, text=True, timeout=600, check=False,
