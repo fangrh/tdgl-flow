@@ -44,11 +44,24 @@ class DFlowTritonPipeline:
         }
         self.sidecar_interval = sidecar_interval
         self._minio_endpoint = minio_endpoint
+        self._minio_access_key = minio_access_key
+        self._minio_secret_key = minio_secret_key
         self._minio_bucket = minio_bucket
 
-        config["s3_endpoint"] = minio_endpoint.replace("http://", "")
-        config["s3_access_key"] = minio_access_key
-        config["s3_secret_key"] = minio_secret_key
+        config["host"] = argo_url
+        config["namespace"] = namespace
+
+        # Configure DFlow's global S3 client for artifact storage.
+        # Upload uses the external endpoint; Argo uses its own artifactRepository config.
+        # Must use the same bucket as Argo's artifactRepository (argo-artifacts).
+        from dflow.utils import s3_config
+        s3_config["endpoint"] = minio_endpoint.replace("http://", "")
+        s3_config["access_key"] = minio_access_key
+        s3_config["secret_key"] = minio_secret_key
+        s3_config["bucket_name"] = "argo-artifacts"
+        s3_config["secure"] = False
+        # Reset cached client so new config takes effect
+        s3_config["storage_client"] = None
 
     def _generate_run_id(self) -> str:
         return (
@@ -64,7 +77,7 @@ class DFlowTritonPipeline:
         epsilon_params: dict | None = None,
     ) -> tuple[str, str]:
         """Submit a DFlow workflow. Returns (run_id, wf_name)."""
-        from dflow import ShellOPTemplate
+        from dflow import ShellOPTemplate, Inputs, Outputs, InputParameter, InputArtifact, OutputArtifact
         from dflow.python import PythonOPTemplate
 
         run_id = self._generate_run_id()
@@ -101,7 +114,8 @@ class DFlowTritonPipeline:
         executor = DispatcherExecutor(
             host=hostname,
             username=username,
-            rsa_key=os.environ.get("SSH_KEY_PATH", "/root/.ssh/id_rsa"),
+            port=22,
+            private_key_file=os.environ.get("SSH_KEY_PATH", "/root/.ssh/id_rsa"),
             queue_name=self.sbatch_options.get("partition", "batch-csl"),
             remote_root=f"{self.triton_work_dir}/jobs/{run_id}",
         )
@@ -110,6 +124,13 @@ class DFlowTritonPipeline:
             name="simulate",
             template=ShellOPTemplate(
                 "simulate",
+                inputs=Inputs(
+                    artifacts={
+                        "device": InputArtifact(path="/tmp/device.pkl"),
+                        "timing": InputArtifact(path="/tmp/timing.json"),
+                        "solver": InputArtifact(path="/tmp/solver_options.json"),
+                    },
+                ),
                 image="python:3.12-slim",
                 script=(
                     "source /scratch/work/fangr1/miniforge3/etc/profile.d/conda.sh && "

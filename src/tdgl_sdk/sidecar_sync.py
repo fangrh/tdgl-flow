@@ -138,7 +138,10 @@ def build_iv_data(local_dir):
     return {"points": points, "vt_by_step": vt_by_step}
 
 
-class SidecarSyncOP:
+from dflow.python import OP, OPIO, OPIOSign
+
+
+class SidecarSyncOP(OP):
     """DFlow OP that syncs sidecar frames from Triton to MinIO.
 
     Runs as a K8s pod in parallel with the simulation step. Loops:
@@ -147,13 +150,14 @@ class SidecarSyncOP:
 
     @classmethod
     def get_input_sign(cls):
-        return {"run_id": str}
+        return OPIOSign({"run_id": str})
 
     @classmethod
     def get_output_sign(cls):
-        return {"status": str}
+        return OPIOSign({"status": str})
 
-    def execute(self, op_in):
+    @OP.exec_sign_check
+    def execute(self, op_in: OPIO) -> OPIO:
         run_id = op_in["run_id"]
         remote_dir = f"/scratch/work/fangr1/tdgl-runner/jobs/{run_id}/sidecars"
         local_dir = f"/tmp/triton-{run_id}/sidecars"
@@ -169,7 +173,7 @@ class SidecarSyncOP:
 
         while True:
             if time.time() - start_time > timeout:
-                return {"status": "timeout"}
+                return OPIO({"status": "timeout"})
 
             try:
                 rsync_sidecars(remote_dir, local_dir, ssh_key, host)
@@ -206,7 +210,7 @@ class SidecarSyncOP:
                     with open(index_path) as f:
                         status = json.load(f).get("status", "running")
                     if status in ("completed", "failed"):
-                        return {"status": status}
+                        return OPIO({"status": status})
 
             except Exception as e:
                 print(f"sidecar-sync error (will retry): {e}")
