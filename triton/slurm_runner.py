@@ -1,20 +1,24 @@
 """SLURM job runner for py-tdgl simulations on Triton.
 
 Runs inside a SLURM compute job. Reads device.pkl + timing.json from
-jobs/{run_id}/, runs the tdgl solver. A background thread monitors the
-growing HDF5 file size for progress. After completion, extracts sidecar
-frames from the final HDF5.
+jobs/{run_id}/, runs the tdgl solver. A child process reads the growing
+HDF5 file in real-time and extracts sidecar frames for live viewing.
+
+HDF5_USE_FILE_LOCKING=FALSE is set before any imports so both the writer
+(tdgl.solve) and the reader subprocess can access the file concurrently.
 
 Usage:
-    python slurm_runner.py <run_id> [--sidecar-interval 10]
+    python slurm_runner.py <run_id> [--sidecar-interval 5]
 """
+import os
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
+
 import argparse
 import json
-import os
 import pickle
 import sys
-import threading
 import time
+from multiprocessing import Process, Event
 
 import h5py
 import numpy as np
@@ -56,77 +60,91 @@ def _write_index(sidecar_dir, total_frames, completed_steps, total_steps, status
         json.dump(index, f)
 
 
-def _progress_poller(output_path, sidecar_dir, total_steps, stop_event, interval=10):
-    """Background thread: monitor HDF5 file size for progress estimation."""
-    last_size = 0
+def _extract_frame(group, fi, steps):
+    """Extract psi, mu, V_t, I_t, time from a single HDF5 frame group."""
+    psi = np.array(group["psi"])
+    mu = np.array(group["mu"]) if "mu" in group else np.zeros_like(psi, dtype=float)
+
+    v_t = 0.0
+    i_t = 0.0
+    if "running_state" in group:
+        rs = group["running_state"]
+        if "mu" in rs and "dt" in rs:
+            rsmu = rs["mu"][...].reshape(-1)
+            rsdt = rs["dt"][...].reshape(-1)
+            k = len(rsdt)
+            if k > 0 and len(rsmu) >= 2 * k:
+                voltage = np.asarray(rsmu[:k]) - np.asarray(rsmu[k:2 * k])
+                dt_sum = float(np.sum(rsdt))
+                v_t = float(np.sum(voltage * rsdt) / dt_sum) if dt_sum > 0 else float(np.mean(voltage))
+
+    time_val = 0.0
+    for s in steps:
+        if "ramp_start" in s:
+            t_start = float(s["ramp_start"])
+            t_end = float(s["stable_end"])
+            mid = (t_start + t_end) / 2
+            if time_val < mid:
+                i_t = float(s.get("je_end", 0.0))
+                break
+
+    return psi, mu, v_t, i_t, time_val
+
+
+def _sidecar_subprocess(output_path, sidecar_dir, steps, total_steps, stop_event, interval=5):
+    """Child process: read growing HDF5, extract new sidecar frames in real-time."""
+    last_step = -1
+    frame_count = 0
+
     while not stop_event.is_set():
         try:
-            size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-            if size > last_size:
-                last_size = size
-                estimated_steps = min(total_steps, int(total_steps * min(1.0, size / max(1, total_steps * 500))))
-                _write_index(sidecar_dir, 0, estimated_steps, total_steps, "running")
-        except OSError:
-            pass
-        stop_event.wait(interval)
+            if not os.path.exists(output_path) or os.path.getsize(output_path) < 4096:
+                stop_event.wait(interval)
+                continue
 
+            with h5py.File(output_path, 'r') as f:
+                if 'data' not in f:
+                    stop_event.wait(interval)
+                    continue
 
-def _extract_sidecars_final(output_path, sidecar_dir, steps):
-    """Extract all frames from the completed HDF5 and write sidecars."""
-    frame_count = 0
-    with h5py.File(output_path, "r") as f:
-        if "data" not in f:
-            return 0
-        data = f["data"]
-        frame_indices = sorted(int(k) for k in data.keys() if k.isdigit())
+                data = f['data']
+                indices = sorted(int(k) for k in data.keys() if k.isdigit())
+                new = [i for i in indices if i > last_step]
 
-        for fi in frame_indices:
-            group = data[str(fi)]
-            psi = np.array(group["psi"])
-            mu = np.array(group["mu"]) if "mu" in group else np.zeros_like(psi, dtype=float)
-
-            v_t = 0.0
-            i_t = 0.0
-            if "running_state" in group:
-                rs = group["running_state"]
-                if "mu" in rs and "dt" in rs:
-                    rsmu = rs["mu"][...].reshape(-1)
-                    rsdt = rs["dt"][...].reshape(-1)
-                    k = len(rsdt)
-                    if k > 0 and len(rsmu) >= 2 * k:
-                        voltage = np.asarray(rsmu[:k]) - np.asarray(rsmu[k:2 * k])
-                        dt_sum = float(np.sum(rsdt))
-                        v_t = float(np.sum(voltage * rsdt) / dt_sum) if dt_sum > 0 else float(np.mean(voltage))
-
-            time_val = 0.0
-            for s in steps:
-                if "ramp_start" in s:
-                    t_start = float(s["ramp_start"])
-                    t_end = float(s["stable_end"])
-                    mid = (t_start + t_end) / 2
-                    if time_val < mid:
-                        i_t = float(s.get("je_end", 0.0))
+                for fi in new:
+                    try:
+                        group = data[str(fi)]
+                        psi, mu, v_t, i_t, time_val = _extract_frame(group, fi, steps)
+                        path = os.path.join(sidecar_dir, f"frame_{frame_count:06d}.npz")
+                        np.savez_compressed(
+                            path,
+                            psi=psi, mu=mu,
+                            V_t=np.float64(v_t), I_t=np.float64(i_t),
+                            step=np.int64(fi), time=np.float64(time_val),
+                        )
+                        frame_count += 1
+                        last_step = fi
+                    except Exception:
                         break
 
-            frame_path = os.path.join(sidecar_dir, f"frame_{frame_count:06d}.npz")
-            np.savez_compressed(
-                frame_path,
-                psi=psi,
-                mu=mu,
-                V_t=np.float64(v_t),
-                I_t=np.float64(i_t),
-                step=np.int64(fi),
-                time=np.float64(time_val),
-            )
-            frame_count += 1
+                if new:
+                    _write_index(
+                        sidecar_dir, frame_count,
+                        min(last_step + 1, total_steps),
+                        total_steps, "running",
+                    )
+                    print(f"  [sidecar] {frame_count} frames extracted (step {last_step})")
 
-    return frame_count
+        except Exception:
+            pass
+
+        stop_event.wait(interval)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("run_id")
-    parser.add_argument("--sidecar-interval", type=int, default=10)
+    parser.add_argument("--sidecar-interval", type=int, default=5)
     args = parser.parse_args()
 
     run_dir = os.path.join(os.path.dirname(__file__), "jobs", args.run_id)
@@ -168,14 +186,13 @@ def main():
 
     _write_index(sidecar_dir, 0, 0, total_steps, "running")
 
-    # Start progress monitor thread
-    stop_event = threading.Event()
-    poller = threading.Thread(
-        target=_progress_poller,
-        args=(output_path, sidecar_dir, total_steps, stop_event, args.sidecar_interval),
+    stop_event = Event()
+    extractor = Process(
+        target=_sidecar_subprocess,
+        args=(output_path, sidecar_dir, steps, total_steps, stop_event, args.sidecar_interval),
         daemon=True,
     )
-    poller.start()
+    extractor.start()
 
     try:
         solve_kwargs = dict(
@@ -189,16 +206,47 @@ def main():
         solution = tdgl.solve(**solve_kwargs)
 
         stop_event.set()
-        poller.join(timeout=30)
+        extractor.join(timeout=30)
 
-        # Extract sidecars from final HDF5
-        print("Extracting sidecar frames from completed HDF5...")
-        frame_count = _extract_sidecars_final(output_path, sidecar_dir, steps)
+        # Final pass: catch any frames the subprocess missed
+        print("Final sidecar extraction pass...")
+        existing = {f for f in os.listdir(sidecar_dir) if f.startswith("frame_") and f.endswith(".npz")}
+        frame_count = len(existing)
+        if os.path.exists(output_path):
+            with h5py.File(output_path, 'r') as f:
+                if 'data' in f:
+                    data = f['data']
+                    indices = sorted(int(k) for k in data.keys() if k.isdigit())
+                    for fi in indices:
+                        fname = None  # check if this step already extracted
+                        already = False
+                        for ef in existing:
+                            d = np.load(os.path.join(sidecar_dir, ef))
+                            if int(d["step"]) == fi:
+                                already = True
+                                d.close()
+                                break
+                            d.close()
+                        if not already:
+                            try:
+                                group = data[str(fi)]
+                                psi, mu, v_t, i_t, time_val = _extract_frame(group, fi, steps)
+                                path = os.path.join(sidecar_dir, f"frame_{frame_count:06d}.npz")
+                                np.savez_compressed(
+                                    path,
+                                    psi=psi, mu=mu,
+                                    V_t=np.float64(v_t), I_t=np.float64(i_t),
+                                    step=np.int64(fi), time=np.float64(time_val),
+                                )
+                                frame_count += 1
+                            except Exception:
+                                pass
+
         _write_index(sidecar_dir, frame_count, total_steps, total_steps, "completed")
         print(f"Run {args.run_id} completed. {frame_count} sidecar frames extracted.")
     except Exception as exc:
         stop_event.set()
-        poller.join(timeout=10)
+        extractor.join(timeout=10)
         _write_index(sidecar_dir, 0, 0, total_steps, "failed")
         print(f"Run {args.run_id} failed: {exc}", file=sys.stderr)
         raise
