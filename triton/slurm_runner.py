@@ -17,10 +17,10 @@ import time
 import h5py
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 import tdgl
-from tdgl_workflow.epsilon import make_gaussian_epsilon
+
+sys.path.insert(0, os.path.dirname(__file__))
+from epsilon import make_gaussian_epsilon
 
 
 def _terminal_currents_from_steps(steps):
