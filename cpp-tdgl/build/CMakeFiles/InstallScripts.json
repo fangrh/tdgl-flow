@@ -1,0 +1,15 @@
+{
+	"InstallScripts" : 
+	[
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/_deps/highfive-build/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/_deps/highfive-build/src/examples/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/_deps/highfive-build/doc/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/_deps/nlohmann_json-build/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/_deps/googletest-build/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/_deps/googletest-build/googlemock/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/_deps/googletest-build/googletest/cmake_install.cmake",
+		"/mnt/c/Users/photo/Photonics_Group/Ruihuan/kubeflow-tdgl/cpp-tdgl/build/tests/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

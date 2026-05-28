@@ -1,0 +1,6 @@
+file(GLOB BENCH_SOURCES "*.cpp")
+foreach(bench_source ${BENCH_SOURCES})
+    get_filename_component(bench_name ${bench_source} NAME_WE)
+    add_executable(${bench_name} ${bench_source})
+    target_link_libraries(${bench_name} PRIVATE tdgl_core benchmark::benchmark)
+endforeach()
