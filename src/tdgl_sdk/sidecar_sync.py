@@ -161,6 +161,234 @@ def rsync_discrete_h5(remote_dir, local_dir, ssh_key, host):
     )
 
 
+def rsync_continuous_h5(remote_dir, local_dir, ssh_key, host):
+    """Incremental rsync of a continuous output.h5 and status index from Triton."""
+    os.makedirs(local_dir, exist_ok=True)
+    ssh_opts = (
+        f"ssh -i {ssh_key}"
+        " -o StrictHostKeyChecking=no"
+        " -o ConnectTimeout=10"
+        " -o UserKnownHostsFile=/dev/null"
+    )
+    subprocess.run(
+        [
+            "rsync", "-az", "--partial",
+            "-e", ssh_opts,
+            "--include=output.h5",
+            "--include=continuous_index.json",
+            "--exclude=*",
+            f"{host}:{remote_dir}/",
+            f"{local_dir}/",
+        ],
+        timeout=300, check=False,
+    )
+
+
+def _dataset_location(ds):
+    shape = [int(d) for d in ds.shape]
+    size = int(np.prod(shape, dtype=np.int64)) * int(ds.dtype.itemsize)
+    offset = ds.id.get_offset()
+    if offset is None:
+        offset = 0
+    return {
+        "offset": int(offset),
+        "size": int(size),
+        "element_size": int(ds.dtype.itemsize),
+        "shape": shape,
+    }
+
+
+def _find_dataset(h5, paths):
+    for path in paths:
+        if path in h5:
+            return h5[path]
+    return None
+
+
+def _timing_step_for_time(steps, t):
+    for idx, step in enumerate(steps):
+        if t < step["ramp_start"]:
+            continue
+        if t <= step["stable_end"]:
+            return idx
+    if steps:
+        return len(steps) - 1
+    return -1
+
+
+def build_h5_viewer_index(local_dir, run_id=None):
+    """Build viewer-compatible index from a continuous output.h5."""
+    import h5py as _h5py
+
+    h5_path = os.path.join(local_dir, "output.h5")
+    if not os.path.exists(h5_path):
+        return None
+
+    status = "running"
+    completed_steps = 0
+    total_steps = 0
+    solve_time = 0.0
+    cindex_path = os.path.join(local_dir, "continuous_index.json")
+    if os.path.exists(cindex_path):
+        try:
+            with open(cindex_path) as f:
+                cindex = json.load(f)
+            status = cindex.get("status", status)
+            completed_steps = int(cindex.get("completed_steps", 0) or 0)
+            total_steps = int(cindex.get("total_steps", 0) or 0)
+            solve_time = float(cindex.get("solve_time", 0.0) or 0.0)
+        except Exception:
+            pass
+
+    try:
+        with _h5py.File(h5_path, "r") as h5:
+            if "data" not in h5:
+                return None
+            data = h5["data"]
+            frame_indices = sorted(int(name) for name in data.keys() if str(name).isdigit())
+            if not frame_indices:
+                return None
+
+            first = data[str(frame_indices[0])]
+            if "psi" not in first:
+                return None
+            n_sites = int(first["psi"].shape[0])
+
+            frame_psi_offsets = []
+            frame_mu_offsets = []
+            frame_rsmu_offsets = []
+            frame_rsdt_offsets = []
+            frame_rsdt_sizes = []
+            frame_supercurrent_offsets = []
+            frame_times = []
+            frame_step_indices = []
+            cumulative_time = 0.0
+
+            for fi in frame_indices:
+                group = data[str(fi)]
+                frame_psi_offsets.append(int(group["psi"].id.get_offset() or 0))
+                frame_mu_offsets.append(int(group["mu"].id.get_offset() or 0) if "mu" in group else 0)
+                if "supercurrent" in group:
+                    frame_supercurrent_offsets.append(int(group["supercurrent"].id.get_offset() or 0))
+                else:
+                    frame_supercurrent_offsets.append(0)
+
+                rsmu_offset = 0
+                rsdt_offset = 0
+                rsdt_size = 0
+                if "running_state" in group:
+                    rs = group["running_state"]
+                    if "mu" in rs:
+                        rsmu_offset = int(rs["mu"].id.get_offset() or 0)
+                    if "dt" in rs:
+                        rsdt = rs["dt"]
+                        rsdt_offset = int(rsdt.id.get_offset() or 0)
+                        rsdt_size = int(np.prod(rsdt.shape, dtype=np.int64)) * int(rsdt.dtype.itemsize)
+                        cumulative_time += float(np.sum(rsdt[...]))
+                frame_rsmu_offsets.append(rsmu_offset)
+                frame_rsdt_offsets.append(rsdt_offset)
+                frame_rsdt_sizes.append(rsdt_size)
+                frame_times.append(cumulative_time)
+                frame_step_indices.append(int(group.attrs.get("je_step_idx", -1)))
+
+            sites = _find_dataset(h5, ["solution/device/mesh/sites", "mesh/sites", "sites", "mesh_sites"])
+            edges = _find_dataset(h5, ["mesh/edges", "edges", "mesh_edges"])
+            mesh_sites = _dataset_location(sites) if sites is not None else {
+                "offset": 0, "size": n_sites * 2 * 8, "element_size": 8, "shape": [n_sites, 2],
+            }
+            mesh_edges = _dataset_location(edges) if edges is not None else {
+                "offset": 0, "size": 0, "element_size": 0, "shape": [],
+            }
+            psi = first["psi"]
+            psi_compressed = bool(psi.compression or psi.chunks is not None)
+    except Exception:
+        return None
+
+    if frame_step_indices:
+        max_step = max(frame_step_indices)
+        if max_step >= 0:
+            completed_steps = max(completed_steps, max_step + 1)
+
+    return {
+        "mesh_sites": mesh_sites,
+        "mesh_edges": mesh_edges,
+        "frame_psi_offsets": frame_psi_offsets,
+        "frame_mu_offsets": frame_mu_offsets,
+        "frame_rsmu_offsets": frame_rsmu_offsets,
+        "frame_rsdt_offsets": frame_rsdt_offsets,
+        "frame_rsdt_sizes": frame_rsdt_sizes,
+        "frame_supercurrent_offsets": frame_supercurrent_offsets,
+        "total_frames": len(frame_indices),
+        "mesh_points": n_sites,
+        "frame_times": frame_times,
+        "frame_step_indices": frame_step_indices,
+        "file_size": os.path.getsize(h5_path),
+        "psi_compressed": psi_compressed,
+        "status": status,
+        "completed_steps": completed_steps,
+        "total_steps": total_steps,
+        "solve_time": solve_time,
+        "run_id": run_id,
+    }
+
+
+def _compute_frame_voltage(rsmu, rsdt):
+    k = len(rsdt)
+    if k == 0 or len(rsmu) < 2 * k:
+        return None
+    voltage = np.asarray(rsmu[:k]) - np.asarray(rsmu[k:2 * k])
+    dt_sum = float(np.sum(rsdt))
+    if dt_sum > 0:
+        return float(np.sum(voltage * rsdt) / dt_sum)
+    return float(np.mean(voltage))
+
+
+def build_h5_iv_data(local_dir):
+    """Build I-V data from a continuous output.h5 using frame je_step_idx attrs."""
+    import h5py as _h5py
+
+    h5_path = os.path.join(local_dir, "output.h5")
+    if not os.path.exists(h5_path):
+        return None
+
+    index = build_h5_viewer_index(local_dir)
+    if not index:
+        return None
+    frame_times = index["frame_times"]
+    points_by_step = {}
+    vt_by_step = {}
+
+    try:
+        with _h5py.File(h5_path, "r") as h5:
+            data = h5["data"]
+            frame_indices = sorted(int(name) for name in data.keys() if str(name).isdigit())
+            for pos, fi in enumerate(frame_indices):
+                group = data[str(fi)]
+                step_idx = int(group.attrs.get("je_step_idx", -1))
+                if step_idx < 0 or "running_state" not in group:
+                    continue
+                rs = group["running_state"]
+                if "mu" not in rs or "dt" not in rs:
+                    continue
+                voltage = _compute_frame_voltage(rs["mu"][...].reshape(-1), rs["dt"][...].reshape(-1))
+                if voltage is None or not np.isfinite(voltage):
+                    continue
+                ramp_start = float(group.attrs.get("ramp_start", 0.0))
+                t = frame_times[pos] if pos < len(frame_times) else 0.0
+                step_key = str(step_idx)
+                vt_by_step.setdefault(step_key, []).append([float(t - ramp_start), voltage])
+                points_by_step[step_idx] = {
+                    "i": float(group.attrs.get("je_end", group.attrs.get("je", 0.0))),
+                    "v": voltage,
+                    "step_idx": step_idx,
+                }
+    except Exception:
+        return None
+
+    points = [points_by_step[k] for k in sorted(points_by_step)]
+    return {"points": points, "vt_by_step": vt_by_step}
+
+
 def build_discrete_viewer_index(local_dir, run_id=None):
     """Build viewer-compatible index from discrete H5 files.
 

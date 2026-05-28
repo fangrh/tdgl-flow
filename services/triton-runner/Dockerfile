@@ -9,6 +9,8 @@ COPY pyproject.toml /app/
 COPY src/ /app/src/
 RUN pip install --no-cache-dir .
 
+COPY triton/slurm_runner.py /app/triton/slurm_runner.py
+
 # Keep runner.py as fallback entrypoint
 COPY services/triton-runner/runner.py /app/runner.py
 
