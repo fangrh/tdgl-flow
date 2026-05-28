@@ -203,13 +203,6 @@ class TdglDiscreteViewer:
                 try:
                     n = self._rust.refresh_index()
                     _latest_frame[0] = n - 1
-                    if n > 0:
-                        try:
-                            _solve_time[0] = self._rust.solve_time()
-                        except Exception:
-                            lt = self._rust.latest_frame_time()
-                            _solve_time[0] = lt * 1.1 if lt > 0 else 1.0
-                        time_slider.max = max(_solve_time[0], 0.1)
                     if n > _prev_total[0]:
                         with _cache_lock:
                             _cache.clear()
