@@ -181,6 +181,15 @@ fn scan_iv(
         let mut read_err = 0usize;
 
         for fi in frame_start..=frame_end {
+            if *stop.lock().unwrap() {
+                let mut p = progress.lock().unwrap();
+                p.points = points.clone();
+                p.steps_completed = si;
+                p.frames_scanned = total_scanned;
+                p.last_error = last_err.clone();
+                return;
+            }
+
             if fi >= total_frames {
                 break;
             }

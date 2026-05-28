@@ -48,7 +48,8 @@ impl<'a> DiscreteReader<'a> {
             .get(global_frame)
             .ok_or_else(|| format!("frame {} out of range", global_frame))?;
         let local = self.index.frame_local_idx[global_frame];
-        let step = &self.index.steps[step_idx];
+        let step = self.index.steps.get(step_idx)
+            .ok_or_else(|| format!("step {} out of range ({} steps)", step_idx, self.index.steps.len()))?;
         let offset = step
             .psi_offsets
             .get(local)
@@ -66,9 +67,11 @@ impl<'a> DiscreteReader<'a> {
     }
 
     pub fn read_mu(&self, global_frame: usize) -> Result<Vec<f64>, String> {
-        let step_idx = self.index.frame_step_map[global_frame];
+        let step_idx = *self.index.frame_step_map.get(global_frame)
+            .ok_or_else(|| format!("frame {} out of range", global_frame))?;
         let local = self.index.frame_local_idx[global_frame];
-        let step = &self.index.steps[step_idx];
+        let step = self.index.steps.get(step_idx)
+            .ok_or_else(|| format!("step {} out of range ({} steps)", step_idx, self.index.steps.len()))?;
         let offset = step
             .mu_offsets
             .get(local)
@@ -83,9 +86,11 @@ impl<'a> DiscreteReader<'a> {
         &self,
         global_frame: usize,
     ) -> Result<Option<(Vec<f64>, Vec<f64>)>, String> {
-        let step_idx = self.index.frame_step_map[global_frame];
+        let step_idx = *self.index.frame_step_map.get(global_frame)
+            .ok_or_else(|| format!("frame {} out of range", global_frame))?;
         let local = self.index.frame_local_idx[global_frame];
-        let step = &self.index.steps[step_idx];
+        let step = self.index.steps.get(step_idx)
+            .ok_or_else(|| format!("step {} out of range ({} steps)", step_idx, self.index.steps.len()))?;
 
         let rsmu_offset = step.rsmu_offsets.get(local).copied().unwrap_or(0);
         let rsdt_offset = step.rsdt_offsets.get(local).copied().unwrap_or(0);

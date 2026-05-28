@@ -320,8 +320,13 @@ fn draw_plot(
         return;
     }
 
-    let x_min = data.iter().map(|d| d.0).fold(f64::MAX, f64::min);
-    let x_max = data.iter().map(|d| d.0).fold(f64::MIN, f64::max);
+    let mut x_min = data.iter().map(|d| d.0).fold(f64::MAX, f64::min);
+    let mut x_max = data.iter().map(|d| d.0).fold(f64::MIN, f64::max);
+    // Include region boundaries so they're always visible even when data doesn't cover them
+    for region in regions {
+        x_min = x_min.min(region.x0).min(region.x1);
+        x_max = x_max.max(region.x0).max(region.x1);
+    }
     let y_min = data.iter().map(|d| d.1).fold(f64::MAX, f64::min);
     let y_max = data.iter().map(|d| d.1).fold(f64::MIN, f64::max);
 

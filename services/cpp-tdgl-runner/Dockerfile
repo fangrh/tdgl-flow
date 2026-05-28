@@ -1,35 +1,27 @@
-# Stage 1: Compile C++ solver
-FROM ubuntu:22.04 AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential ca-certificates cmake git libeigen3-dev libhdf5-dev liblapack-dev \
-    libsuitesparse-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-COPY git-tdgl-light/cpp-tdgl /build/cpp-tdgl
-
-RUN cd /build/cpp-tdgl && \
-    cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && \
-    cmake --build build -j$(nproc)
-
-# Stage 2: Python runtime
-FROM ubuntu:22.04
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python-is-python3 \
-    libhdf5-dev liblapack3 libsuitesparse-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /build/cpp-tdgl/build/tdgl_solve /usr/local/bin/cpp-tdgl-solve
+FROM python:3.13
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir boto3 h5py numpy scipy tdgl
+RUN pip install --no-cache-dir boto3 h5py numpy pillow scipy tdgl
 
 COPY src/tdgl_workflow/ /app/vendor/tdgl_workflow/
 COPY src/tdgl_sdk/ /app/vendor/tdgl_sdk/
+
+# Install C++ build deps + build cpp-tdgl
+RUN apt-get update && apt-get install -y \
+    build-essential cmake curl \
+    libeigen3-dev libsuitesparse-dev \
+    libopenmpi-dev openmpi-bin libgomp1 \
+    libhdf5-dev libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY cpp-tdgl/ /app/cpp-tdgl/
+RUN cd /app/cpp-tdgl && mkdir -p build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && \
+    make -j$(nproc) tdgl_solve && \
+    mv tdgl_solve /usr/local/bin/cpp-tdgl-solve
+
 COPY services/cpp-tdgl-runner/ /app/
 
-CMD ["python", "/app/runner.py"]
+ENTRYPOINT ["python", "/app/runner.py"]

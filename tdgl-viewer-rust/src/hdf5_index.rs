@@ -59,6 +59,20 @@ pub fn build_index(client: &crate::minio::MinioClient, run_id: &str, log_fn: Opt
     let t0 = std::time::Instant::now();
     let index_cache_path = index_cache_path(run_id);
 
+    // Try local cache first
+    if let Ok(cached_json) = fs::read_to_string(&index_cache_path) {
+        if let Ok(index) = serde_json::from_str::<H5Index>(&cached_json) {
+            if index.total_frames > 0
+                && index.frame_times.len() == index.total_frames
+                && index.frame_psi_offsets.len() == index.total_frames
+            {
+                log!("build_index() loaded from local cache: {} frames, {:.3}s",
+                    index.total_frames, t0.elapsed().as_secs_f64());
+                return Ok(index);
+            }
+        }
+    }
+
     match build_index_from_sidecar(client, run_id, log_fn)? {
         Some(index) => {
             log!("build_index() sidecar loaded: {} frames, file_size={}, psi_compressed={:?}, {:.3}s",
@@ -104,7 +118,8 @@ fn build_index_from_sidecar(
     let h5_key = client.h5_key(run_id);
     let current_size = client.object_size(&h5_key).ok().flatten();
     if let (Some(cur), cached) = (current_size, index.file_size) {
-        if cached > 0 && cur < cached {
+        // Skip check when H5 reports 0 (multipart upload in progress)
+        if cached > 0 && cur > 0 && cur < cached {
             log!("build_index_from_sidecar() H5 size check failed: current={} < cached={}", cur, cached);
             return Ok(None);
         }
