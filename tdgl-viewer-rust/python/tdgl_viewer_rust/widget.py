@@ -336,6 +336,7 @@ class TdglDiscreteViewer:
         self, time_slider, image, time_label, status, play_btn,
         cache, cache_lock, suppress_slider, play_token,
     ):
+        self._stop_playback()
         self._playing = True
         self._stop.clear()
         play_token[0] += 1
@@ -356,7 +357,7 @@ class TdglDiscreteViewer:
         self._playing = False
         self._stop.set()
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=5.0)
         self._thread = None
 
     def _loop(
@@ -371,7 +372,7 @@ class TdglDiscreteViewer:
                     break
 
                 if self._run_id is None:
-                    self._stop.wait(1.0)
+                    self._stop.wait(0.2)
                     continue
 
                 speed = max(0.1, float(self._speed))
@@ -380,7 +381,7 @@ class TdglDiscreteViewer:
                     latest = self._rust.total_frames() - 1
                     current_frame = self._rust.time_to_frame(time_slider.value)
                 except Exception:
-                    self._stop.wait(1.0)
+                    self._stop.wait(0.2)
                     continue
                 current_frame = min(current_frame, latest)
                 try:
@@ -394,7 +395,7 @@ class TdglDiscreteViewer:
 
                 if current_frame >= latest:
                     if latest_t < solve_t * 0.9:
-                        self._stop.wait(1.0)
+                        self._stop.wait(0.2)
                         continue
                     if prev_frame != latest:
                         _render_done = threading.Event()
@@ -429,7 +430,10 @@ class TdglDiscreteViewer:
                 frame_carry += speed
                 frame_step = int(frame_carry)
                 if frame_step < 1:
-                    self._stop.wait(interval)
+                    while interval > 0 and not self._stop.is_set():
+                        chunk = min(interval, 0.1)
+                        self._stop.wait(chunk)
+                        interval -= chunk
                     continue
                 frame_carry -= frame_step
 
@@ -456,7 +460,7 @@ class TdglDiscreteViewer:
                         break
                     png = _render_result[0]
                     if png is None:
-                        self._stop.wait(1.0)
+                        self._stop.wait(0.2)
                         continue
                     if play_token[0] != token or self._stop.is_set():
                         break
