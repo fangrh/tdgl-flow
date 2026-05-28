@@ -161,7 +161,7 @@ class DFlowTritonPipeline:
 
         sync_script = textwrap.dedent(f"""\
             python3 -c '
-            import json, os, stat, time, tempfile
+            import json, os, stat, time, tempfile, atexit
             from tdgl_sdk.sidecar_sync import (
                 rsync_discrete_h5, minio_object_exists, upload_to_minio,
                 upload_json_to_minio, build_discrete_viewer_index,
@@ -182,6 +182,23 @@ class DFlowTritonPipeline:
             bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
             endpoint = os.environ.get("MINIO_ENDPOINT", "http://minio.tdgl.svc.cluster.local:9000")
             timeout = int(os.environ.get("SYNC_TIMEOUT", "14400"))
+
+            def _final_upload():
+                try:
+                    rsync_discrete_h5(remote_dir, local_dir, ssh_key, host)
+                    index = build_discrete_viewer_index(local_dir, run_id)
+                    if index and index.get("status") == "running":
+                        index["status"] = "failed"
+                    if index:
+                        upload_json_to_minio(index, bucket, f"tdgl-runs/{{run_id}}/viewer-index.json", endpoint)
+                    iv = build_discrete_iv_data(local_dir)
+                    if iv:
+                        upload_json_to_minio(iv, bucket, f"tdgl-runs/{{run_id}}/iv.json", endpoint)
+                    print("SYNC_EXIT: final upload done")
+                except Exception as e:
+                    print(f"SYNC_EXIT: final upload failed: {{e}}")
+
+            atexit.register(_final_upload)
 
             start = time.time()
             while True:
