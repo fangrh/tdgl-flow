@@ -178,8 +178,34 @@ def build_discrete_viewer_index(local_dir, run_id=None):
     with open(index_path) as f:
         dindex = json.load(f)
 
-    completed = [s for s in dindex.get("steps", []) if s.get("status") == "completed"]
+    completed = []
+    for step in dindex.get("steps", []):
+        try:
+            step_idx = int(step.get("step_idx", 0))
+        except (TypeError, ValueError):
+            continue
+        if step.get("status") == "completed" and step.get("h5_file") and step_idx >= 0:
+            completed.append(step)
     if not completed:
+        return None
+
+    def _existing_mesh_metadata():
+        if not run_id:
+            return None
+        bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
+        endpoint = os.environ.get("MINIO_ENDPOINT", "http://minio.tdgl.svc.cluster.local:9000")
+        key = f"tdgl-runs/{run_id}/viewer-index.json"
+        try:
+            s3 = _get_minio_client(endpoint)
+            obj = s3.get_object(Bucket=bucket, Key=key)
+            existing = json.loads(obj["Body"].read())
+            points = int(existing.get("mesh_points", 0) or 0)
+            offset = int(existing.get("mesh_sites_offset", 0) or 0)
+            size = int(existing.get("mesh_sites_size", 0) or 0)
+            if points > 0 and offset > 0 and size > 0:
+                return points, offset, size
+        except Exception:
+            pass
         return None
 
     # Read mesh info from first H5
@@ -188,9 +214,32 @@ def build_discrete_viewer_index(local_dir, run_id=None):
     mesh_sites_offset = 0
     mesh_sites_size = 0
     first_h5 = os.path.join(local_dir, completed[0]["h5_file"])
-    if os.path.exists(first_h5):
+    mesh_h5_path = first_h5
+    # If the rsync'd file is incomplete, download from MinIO for mesh extraction
+    _mesh_ok = False
+    if os.path.exists(mesh_h5_path):
         try:
-            with _h5py.File(first_h5, "r") as f:
+            with _h5py.File(mesh_h5_path, "r") as _tf:
+                if "solution" in _tf:
+                    _mesh_ok = True
+        except Exception:
+            pass
+    if not _mesh_ok:
+        # Download full first H5 from MinIO for mesh extraction
+        _bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
+        _endpoint = os.environ.get("MINIO_ENDPOINT", "http://minio.tdgl.svc.cluster.local:9000")
+        _minio_key = f"tdgl-runs/{run_id}/{completed[0]['h5_file']}" if run_id else None
+        if _minio_key and minio_object_exists(_endpoint, _bucket, _minio_key):
+            _tmp_mesh = os.path.join(local_dir, ".mesh_tmp.h5")
+            try:
+                s3 = _get_minio_client(_endpoint)
+                s3.download_file(_bucket, _minio_key, _tmp_mesh)
+                mesh_h5_path = _tmp_mesh
+            except Exception:
+                pass
+    if os.path.exists(mesh_h5_path):
+        try:
+            with _h5py.File(mesh_h5_path, "r") as f:
                 sites_ds = None
                 for path in ("mesh/sites", "solution/device/mesh/sites"):
                     parts = path.split("/")
@@ -210,6 +259,10 @@ def build_discrete_viewer_index(local_dir, run_id=None):
                     mesh_sites_size = sites_ds.size * sites_ds.dtype.itemsize
         except Exception:
             pass
+    if mesh_points <= 0 or mesh_sites_offset <= 0 or mesh_sites_size <= 0:
+        existing_mesh = _existing_mesh_metadata()
+        if existing_mesh is not None:
+            mesh_points, mesh_sites_offset, mesh_sites_size = existing_mesh
 
     # Build per-step offset arrays
     step_indices = []
@@ -217,8 +270,9 @@ def build_discrete_viewer_index(local_dir, run_id=None):
     frame_step_map = []
     frame_local_idx = []
     total_frames = 0
+    step_list_idx = 0
 
-    for si, step_info in enumerate(completed):
+    for step_info in completed:
         h5_path = os.path.join(local_dir, step_info["h5_file"])
         if not os.path.exists(h5_path):
             continue
@@ -282,7 +336,7 @@ def build_discrete_viewer_index(local_dir, run_id=None):
                     frac = li / max(n - 1, 1) if n > 1 else 0.0
                     abs_time = step_info["ramp_start"] + frac * step_duration
                     frame_times.append(abs_time)
-                    frame_step_map.append(si)
+                    frame_step_map.append(step_list_idx)
                     frame_local_idx.append(li)
                     total_frames += 1
 
@@ -290,6 +344,7 @@ def build_discrete_viewer_index(local_dir, run_id=None):
             continue
 
         step_indices.append(step_offsets)
+        step_list_idx += 1
 
     if total_frames == 0:
         return None
@@ -302,7 +357,7 @@ def build_discrete_viewer_index(local_dir, run_id=None):
         "frame_times": frame_times,
         "frame_step_map": frame_step_map,
         "frame_local_idx": frame_local_idx,
-        "completed_steps": len(completed),
+        "completed_steps": len(step_indices),
         "total_steps": dindex.get("total_steps", len(completed)),
         "status": dindex.get("status", "running"),
         "solve_time": dindex.get("solve_time", 0.0),
