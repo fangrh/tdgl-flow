@@ -11,6 +11,7 @@ option(BUILD_BENCHMARKS "Build benchmarks" OFF)
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 find_package(HDF5 REQUIRED COMPONENTS C CXX)
 find_package(OpenMP)
+find_package(CURL REQUIRED)
 
 # SuiteSparse: find UMFPACK
 find_path(SUITESPARSE_INCLUDE_DIRS
@@ -90,8 +91,9 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 # Main executable
-add_executable(tdgl_solve src/main.cpp)
-target_link_libraries(tdgl_solve PRIVATE tdgl_core)
+add_executable(tdgl_solve src/main.cpp src/sync/minio_synchronizer.cpp)
+target_link_libraries(tdgl_solve PRIVATE tdgl_core ${CURL_LIBRARIES})
+target_include_directories(tdgl_solve PRIVATE ${CURL_INCLUDE_DIRS})
 
 # Tests
 if(BUILD_TESTING)
