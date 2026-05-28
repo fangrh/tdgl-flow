@@ -330,7 +330,7 @@ class DFlowTritonPipeline:
             name="sidecar-sync",
             template=ShellOPTemplate(
                 "sidecar-sync",
-                image="172.22.133.208:30500/triton-runner:202605281434",
+                image="172.22.133.208:30500/triton-runner:latest",
                 script=sync_script,
                 volumes=[
                     {
