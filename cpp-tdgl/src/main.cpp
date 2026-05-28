@@ -41,6 +41,7 @@ int main(int argc, char* argv[]) {
     std::ios_base::sync_with_stdio(true);
     std::string mesh_path = "data/reference.h5";
     std::string output_path = "data/cpp_output.h5";
+    std::string output_dir;
     double source_current = 1.0;
     double drain_current = -1.0;
     double applied_field_override = std::numeric_limits<double>::quiet_NaN();
@@ -53,6 +54,7 @@ int main(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--mesh" && i + 1 < argc) mesh_path = argv[++i];
         else if (arg == "--output" && i + 1 < argc) output_path = argv[++i];
+        else if (arg == "--output-dir" && i + 1 < argc) output_dir = argv[++i];
         else if (arg == "--source-current" && i + 1 < argc)
             source_current = std::stod(argv[++i]);
         else if (arg == "--drain-current" && i + 1 < argc)
@@ -74,6 +76,7 @@ int main(int argc, char* argv[]) {
                       << " [--timing <timing.json>]"
                       << " [--solver-options <json>]"
                       << " [--restart <result.h5>]"
+                      << " [--output-dir <dir>]"
                       << " [--log-file <path>]\n";
             return 0;
         }
@@ -166,7 +169,42 @@ int main(int argc, char* argv[]) {
         }
 
         std::unique_ptr<TdglSolver> solver_ptr;
-        if (!timing_path.empty()) {
+        std::unique_ptr<SplitSolutionWriter> split_writer;
+
+        if (!output_dir.empty() && !timing_path.empty()) {
+            // Use SplitSolutionWriter for per-step HDF5 output
+            split_writer = std::make_unique<SplitSolutionWriter>(output_dir, device.mesh, device);
+            split_writer->write_mesh();
+
+            auto timing = parse_timing_json(timing_path);
+            options.solve_time = timing.solve_time;
+            std::cout << "Timing: " << timing.n_steps << " steps, solve_time=" << timing.solve_time << "\n";
+
+            solver_ptr = std::make_unique<TdglSolver>(
+                device, options, applied_A, timing,
+                1.0, "", restart_path);
+
+            // Capture timing and split_writer in callback
+            auto timing_copy = timing;
+            solver_ptr->on_step_complete = [&, split_writer_ptr = split_writer.get()](int step_idx) {
+                split_writer_ptr->end_step();
+                int next_step = step_idx + 1;
+                if (next_step < (int)timing_copy.steps.size()) {
+                    double next_ramp_start = timing_copy.steps[next_step].ramp_start;
+                    double je = solver_ptr->terminal_current_at(next_ramp_start);
+                    split_writer_ptr->begin_step(next_step, je,
+                        timing_copy.steps[next_step].ramp_start,
+                        timing_copy.steps[next_step].stable_end);
+                }
+            };
+
+            // Begin first step
+            double je0 = solver_ptr->terminal_current_at(timing.steps[0].ramp_start);
+            split_writer->begin_step(0, je0,
+                timing.steps[0].ramp_start,
+                timing.steps[0].stable_end);
+
+        } else if (!timing_path.empty()) {
             auto timing = parse_timing_json(timing_path);
             options.solve_time = timing.solve_time;
             std::cout << "Timing: " << timing.n_steps << " steps, solve_time=" << timing.solve_time << "\n";
@@ -188,6 +226,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Running solver...\n";
         if (options.save_every <= 0) options.save_every = 1;
         solver_ptr->solve();
+
+        if (split_writer) {
+            split_writer->write_manifest("run_" + std::to_string(time(nullptr)), options.solve_time);
+        }
 
         std::cout << "Done.\n";
         if (old_cout_buf) std::cout.rdbuf(old_cout_buf);

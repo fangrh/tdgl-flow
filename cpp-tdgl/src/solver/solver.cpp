@@ -175,6 +175,7 @@ TdglSolver::TdglSolver(const Device& device, const Options& options,
         options_.solve_time = timing_.solve_time;
     }
     probe_indices_ = device.probe_point_indices;
+    current_step_idx_ = 0;
 }
 
 void TdglSolver::update_mu_boundary(double j_scale) {
@@ -366,6 +367,19 @@ void TdglSolver::solve() {
 
         // Record running state (probe-point mu values at each step)
         record_running_state();
+
+        // Detect timing step completion
+        if (use_timing_ && step > 0) {
+            const auto& steps = timing_.steps;
+            int next_step_idx = current_step_idx_ + 1;
+            if (next_step_idx < (int)steps.size()) {
+                double step_end_time = steps[next_step_idx].ramp_start;
+                if (time_ >= step_end_time) {
+                    if (on_step_complete) on_step_complete(current_step_idx_);
+                    current_step_idx_ = next_step_idx;
+                }
+            }
+        }
 
         // Save if needed
         save_counter++;

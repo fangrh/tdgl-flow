@@ -7,6 +7,7 @@
 #include "solution/solution.h"
 #include "timing/timing.h"
 #include <Eigen/Core>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -30,10 +31,14 @@ public:
 
     void solve();
     const SolutionWriter* solution_writer() const { return solution_writer_.get(); }
+    SplitSolutionWriter* split_writer() const { return split_writer_; }
+    double terminal_current_at(double t) const;
+
+    // Callback invoked when a timing step boundary is crossed
+    std::function<void(int step_idx)> on_step_complete;
 
 private:
     void update_mu_boundary(double j_scale = 1.0);
-    double terminal_current_at(double t) const;
     void record_running_state();
 
     const Device& device_;
@@ -69,6 +74,9 @@ private:
     std::vector<double> rs_dt_buffer_;
 
     std::unique_ptr<SolutionWriter> solution_writer_;
+    SplitSolutionWriter* split_writer_ = nullptr;
+    int current_step_idx_ = 0;
+
     double time_ = 0.0;
     double dt_ = 0.0;
 };
