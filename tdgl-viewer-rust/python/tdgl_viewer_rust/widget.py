@@ -91,8 +91,11 @@ class TdglDiscreteViewer:
         try:
             solve_t = self._rust.solve_time()
         except Exception:
-            latest_t = self._rust.latest_frame_time()
-            solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
+            try:
+                latest_t = self._rust.latest_frame_time()
+                solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
+            except Exception:
+                solve_t = 1.0
 
         # ── Widgets ────────────────────────────────────────────────────
         image = widgets.Image(format="png", width=FRAME_W)
