@@ -149,10 +149,16 @@ class TdglDiscreteViewer:
         _live_thread = [None]
 
         def _time_to_frame(t):
-            f = self._rust.time_to_frame(t)
-            return min(f, _latest_frame[0])
+            try:
+                f = self._rust.time_to_frame(t)
+                return min(f, _latest_frame[0])
+            except Exception:
+                return 0
 
         def _render(frame_idx, update_slider=True):
+            if self._run_id is None:
+                status.value = "Select a run from dropdown"
+                return
             frame_idx = max(0, min(frame_idx, _latest_frame[0]))
             _current_frame[0] = frame_idx
             _render_token[0] += 1
@@ -317,6 +323,10 @@ class TdglDiscreteViewer:
 
         if total > 0:
             _render(0)
+        elif not run_ids:
+            pass
+        else:
+            status.value = "Select a run from dropdown"
 
         ui = widgets.VBox([
             run_dropdown,
@@ -367,16 +377,27 @@ class TdglDiscreteViewer:
                 if play_token[0] != token:
                     break
 
+                if self._run_id is None:
+                    self._stop.wait(1.0)
+                    continue
+
                 speed = max(0.1, float(self._speed))
                 interval = 1.0 / self._fps
-                latest = self._rust.total_frames() - 1
-                current_frame = self._rust.time_to_frame(time_slider.value)
+                try:
+                    latest = self._rust.total_frames() - 1
+                    current_frame = self._rust.time_to_frame(time_slider.value)
+                except Exception:
+                    self._stop.wait(1.0)
+                    continue
                 current_frame = min(current_frame, latest)
                 try:
                     solve_t = self._rust.solve_time()
                 except Exception:
                     solve_t = 1.0
-                latest_t = self._rust.latest_frame_time()
+                try:
+                    latest_t = self._rust.latest_frame_time()
+                except Exception:
+                    latest_t = 0.0
 
                 if current_frame >= latest:
                     if latest_t < solve_t * 0.9:
