@@ -96,7 +96,7 @@ def write_cpp_mesh(
                 # epsilon_fn expects physical coordinates (length_units)
                 x_phys = sites[i, 0] * xi
                 y_phys = sites[i, 1] * xi
-                epsilon[i] = float(epsilon_fn(x_phys, y_phys))
+                epsilon[i] = float(epsilon_fn((x_phys, y_phys)))
             f.create_dataset("epsilon", data=epsilon)
 
         # --- /options (optional) ---
