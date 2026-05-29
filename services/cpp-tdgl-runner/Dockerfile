@@ -16,7 +16,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY cpp-tdgl/ /app/cpp-tdgl/
-RUN cd /app/cpp-tdgl && mkdir -p build && cd build && \
+RUN rm -rf /app/cpp-tdgl/build && \
+    cd /app/cpp-tdgl && mkdir -p build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release \
              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && \
     make -j$(nproc) tdgl_solve && \
