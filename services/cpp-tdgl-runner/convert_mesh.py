@@ -88,6 +88,10 @@ def write_cpp_mesh(
         em_group.create_dataset("edges", data=np.asarray(em.edges, dtype=np.int64))
         em_group.create_dataset("edge_lengths", data=np.asarray(em.edge_lengths, dtype=np.float64))
         em_group.create_dataset("dual_edge_lengths", data=np.asarray(em.dual_edge_lengths, dtype=np.float64))
+        em_group.create_dataset(
+            "boundary_edge_indices",
+            data=np.asarray(em.boundary_edge_indices, dtype=np.int64),
+        )
 
         # --- /epsilon (optional) ---
         if epsilon_fn is not None:
@@ -173,3 +177,8 @@ def write_cpp_mesh_from_data(mesh_data: dict, output_path: str):
         em_group.create_dataset("edges", data=np.asarray(em_dict["edges"], dtype=np.int64))
         em_group.create_dataset("edge_lengths", data=np.asarray(em_dict["edge_lengths"], dtype=np.float64))
         em_group.create_dataset("dual_edge_lengths", data=np.asarray(em_dict["dual_edge_lengths"], dtype=np.float64))
+        if "boundary_edge_indices" in em_dict:
+            em_group.create_dataset(
+                "boundary_edge_indices",
+                data=np.asarray(em_dict["boundary_edge_indices"], dtype=np.int64),
+            )
