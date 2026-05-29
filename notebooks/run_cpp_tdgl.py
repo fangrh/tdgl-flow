@@ -108,6 +108,48 @@ plt.tight_layout()
 plt.show()
 
 #%%
+# ── Plot timing sequence ──────────────────────────────────────────────────
+tp = TIMING_PARAMS
+je_i, je_f, je_s = tp["je_initial"], tp["je_final"], tp["je_step"]
+ramp_t, stable_t = tp["ramp_time"], tp["stable_time"]
+ramp_down = tp.get("ramp_down", False)
+n_up = max(1, int(round((je_f - je_i) / je_s)))
+period = ramp_t + stable_t
+
+fig, ax = plt.subplots(figsize=(10, 3))
+
+# Up ramp
+up_starts = [je_i + i * je_s for i in range(n_up)]
+for i, js in enumerate(up_starts):
+    je_end = js + je_s
+    t0 = i * period
+    ax.plot([t0, t0 + ramp_t], [js, je_end], "C0-", linewidth=1.5)
+    ax.plot([t0 + ramp_t, t0 + period], [je_end, je_end], "C0-", linewidth=1.5)
+
+# Down ramp
+if ramp_down:
+    down_offset = n_up * period
+    down_starts = [je_f - i * je_s for i in range(n_up)]
+    for i, js in enumerate(down_starts):
+        je_end = js - je_s
+        t0 = down_offset + i * period
+        ax.plot([t0, t0 + ramp_t], [js, je_end], "C1-", linewidth=1.5)
+        ax.plot([t0 + ramp_t, t0 + period], [je_end, je_end], "C1-", linewidth=1.5)
+
+total_t = n_up * period * (2 if ramp_down else 1)
+n_total = n_up * (2 if ramp_down else 1)
+ax.set_xlabel("Time (dimensionless)")
+ax.set_ylabel("Je")
+title = f"Timing: {n_total} steps, Je {je_i}→{je_f}"
+if ramp_down:
+    title += f"→{je_i}"
+title += f", ramp={ramp_t}, stable={stable_t}"
+ax.set_title(title)
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+#%%
 # ── Submit cpp-tdgl workflow ──────────────────────────────────────────────
 pipe = SimulationPipeline(argo_url=ARGO_URL, minio_endpoint=MINIO_URL)
 
