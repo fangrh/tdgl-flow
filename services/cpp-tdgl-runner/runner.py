@@ -3,6 +3,7 @@
 Builds mesh with Python tdgl, converts to cpp-tdgl HDF5 format,
 runs C++ solver, uploads results to MinIO for real-time viewing.
 """
+import glob
 import json
 import os
 import pickle
@@ -153,6 +154,117 @@ def _build_viewer_index(output_path):
         }
 
 
+def _flatten_step_file(src_path, dst_path):
+    """Convert a C++ step file to viewer-ready format with contiguous psi/mu.
+
+    The C++ SplitSolutionWriter stores frames as separate HDF5 groups:
+        /data/step_0/psi, /data/step_0/mu, /data/step_1/psi, ...
+
+    The viewer expects contiguous byte layout:
+        psi_offset + frame_idx * (n_sites * 16)
+
+    This function stacks all frames into single contiguous datasets and
+    returns the byte offsets the viewer needs.
+
+    Returns dict with: psi_offset, mu_offset, total_frames, je, ramp_start, stable_end
+    """
+    with h5py.File(src_path, "r") as src:
+        meta = src.get("metadata")
+        je = float(meta.attrs["je"]) if meta and "je" in meta.attrs else 0.0
+        ramp_start = float(meta.attrs["ramp_start"]) if meta and "ramp_start" in meta.attrs else 0.0
+        stable_end = float(meta.attrs["stable_end"]) if meta and "stable_end" in meta.attrs else 0.0
+
+        data = src["data"]
+        # Find frame groups: /data/step_0, /data/step_1, ...
+        frame_names = sorted(
+            (n for n in data if n.startswith("step_")),
+            key=lambda n: int(n.split("_")[1]),
+        )
+        if not frame_names:
+            raise RuntimeError(f"No frames found in {src_path}")
+
+        all_psi = np.stack([data[fn]["psi"][:] for fn in frame_names])  # (F, N, 2)
+        all_mu = np.stack([data[fn]["mu"][:] for fn in frame_names])    # (F, N)
+
+    with h5py.File(dst_path, "w") as dst:
+        dst.create_dataset("psi", data=all_psi)
+        dst.create_dataset("mu", data=all_mu)
+        psi_offset = int(dst["psi"].id.get_offset())
+        mu_offset = int(dst["mu"].id.get_offset())
+
+    return {
+        "psi_offset": psi_offset,
+        "mu_offset": mu_offset,
+        "total_frames": len(frame_names),
+        "je": je,
+        "ramp_start": ramp_start,
+        "stable_end": stable_end,
+    }
+
+
+def _upload_discrete_output(steps_dir, bucket, run_id):
+    """Process step files into viewer-ready format and upload to MinIO.
+
+    Called once after the solver finishes. Creates:
+        tdgl-runs/{run_id}/mesh.h5
+        tdgl-runs/{run_id}/step_0000.h5  (viewer-ready, contiguous psi/mu)
+        tdgl-runs/{run_id}/discrete_index.json
+
+    Returns the number of steps uploaded.
+    """
+    prefix = f"tdgl-runs/{run_id}"
+
+    # 1. Upload mesh.h5 (C++ SplitSolutionWriter::write_mesh() already creates this)
+    mesh_local = os.path.join(steps_dir, "mesh.h5")
+    if os.path.exists(mesh_local):
+        _upload_to_minio(mesh_local, bucket, f"{prefix}/mesh.h5")
+        print(f"Uploaded mesh.h5 ({os.path.getsize(mesh_local)} bytes)")
+    else:
+        print("Warning: mesh.h5 not found in steps dir")
+
+    # 2. Process and upload each step file
+    step_files = sorted(glob.glob(os.path.join(steps_dir, "step_*.h5")))
+    index_steps = []
+
+    for sf in step_files:
+        basename = os.path.basename(sf)  # step_0000.h5
+        flat_path = sf + ".flat"         # temporary viewer-ready file
+
+        try:
+            info = _flatten_step_file(sf, flat_path)
+        except Exception as e:
+            print(f"Warning: could not flatten {basename}: {e}")
+            continue
+
+        _upload_to_minio(flat_path, bucket, f"{prefix}/{basename}")
+        os.remove(flat_path)
+
+        index_steps.append({
+            "step_idx": int(basename.replace("step_", "").replace(".h5", "")),
+            "file": basename,
+            "offsets": {
+                "psi": info["psi_offset"],
+                "mu": info["mu_offset"],
+            },
+            "total_frames": info["total_frames"],
+            "je": info["je"],
+            "ramp_start": info["ramp_start"],
+            "stable_end": info["stable_end"],
+        })
+        print(f"Uploaded {basename}: {info['total_frames']} frames, "
+              f"Je={info['je']:.2f}, psi_offset={info['psi_offset']}")
+
+    # 3. Upload discrete_index.json
+    index_data = {"steps": index_steps}
+    index_path = os.path.join(steps_dir, "discrete_index.json")
+    with open(index_path, "w") as f:
+        json.dump(index_data, f, indent=2)
+    _upload_to_minio(index_path, bucket, f"{prefix}/discrete_index.json")
+    print(f"Uploaded discrete_index.json ({len(index_steps)} steps)")
+
+    return len(index_steps)
+
+
 def _compute_iv_sidecar(output_path, timing_steps, average_time=0.5):
     index = _build_viewer_index(output_path)
     frame_times = index["frame_times"]
@@ -284,6 +396,7 @@ def main():
 
     # Prepare output paths
     output_path = os.path.join(DATA_DIR, "output.h5")
+    steps_dir = os.path.join(DATA_DIR, "steps")
     timing_path = os.path.join(DATA_DIR, "timing.json")
 
     # Upload "running" manifest
@@ -292,6 +405,7 @@ def main():
         "run_id": run_id,
         "status": "running",
         "created_at": now,
+        "tool": "cpp-tdgl",
         "n_sites": n_sites,
         "device_params": {
             "film_width": mesh_meta.get("film_width"),
@@ -326,6 +440,7 @@ def main():
             CPP_SOLVER,
             "--mesh", cpp_mesh_path,
             "--output", output_path,
+            "--output-dir", steps_dir,
             "--timing", timing_path,
             "--solver-options", json.dumps(solver_options),
         ]
@@ -335,29 +450,42 @@ def main():
         if result.returncode != 0:
             raise RuntimeError(f"cpp-tdgl-solve exited with code {result.returncode}")
 
-        # Final upload
+        # Stop periodic upload
         upload_stop.set()
         upload_thread.join(timeout=60)
-        _upload_to_minio(output_path, bucket, f"tdgl-runs/{run_id}/output.h5")
-        _write_and_upload_sidecars(
-            output_path,
-            bucket,
-            run_id,
-            timing_data["steps"] + timing_data.get("ramp_down_steps", []),
-            include_iv=True,
-        )
 
-        # Count frames
+        # Upload monolithic output + sidecars (backward compat)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            _upload_to_minio(output_path, bucket, f"tdgl-runs/{run_id}/output.h5")
+            _write_and_upload_sidecars(
+                output_path,
+                bucket,
+                run_id,
+                timing_data["steps"] + timing_data.get("ramp_down_steps", []),
+                include_iv=True,
+            )
+
+        # Upload discrete step files for the Rust viewer
+        n_discrete = 0
+        if os.path.isdir(steps_dir):
+            n_discrete = _upload_discrete_output(steps_dir, bucket, run_id)
+
+        # Count frames from monolithic output
         n_frames = 0
-        with h5py.File(output_path, "r") as f:
-            n_frames = len(f["data"].keys())
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            with h5py.File(output_path, "r") as f:
+                n_frames = len(f["data"].keys())
 
         manifest = {
             "run_id": run_id,
             "status": "completed",
             "created_at": now,
+            "tool": "cpp-tdgl",
             "n_sites": n_sites,
             "n_frames": n_frames,
+            "num_steps": n_discrete,
+            "discrete_index_file": "discrete_index.json",
+            "mesh_file": "mesh.h5",
             "device_params": {
                 "film_width": mesh_meta.get("film_width"),
                 "film_height": mesh_meta.get("film_height"),
@@ -376,7 +504,7 @@ def main():
             "solver_options": solver_options,
         }
         _upload_manifest(manifest, bucket, run_id)
-        print(f"Run {run_id} completed. {n_frames} frames.")
+        print(f"Run {run_id} completed. {n_frames} frames, {n_discrete} discrete steps.")
 
     except Exception as exc:
         upload_stop.set()
