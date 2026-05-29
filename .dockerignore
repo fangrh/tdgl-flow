@@ -10,3 +10,5 @@ __pycache__/
 infra/
 docs/
 services/*/k8s/
+cpp-tdgl/build/
+cpp-tdgl-viewer-rust/target/
