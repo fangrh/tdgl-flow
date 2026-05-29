@@ -39,7 +39,7 @@ Use the existing `services/py-tdgl-runner/` and `workflows/rectangle-device-buil
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **tdgl-flow** (1740 symbols, 2776 relationships, 94 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **tdgl-flow** (3652 symbols, 5848 relationships, 169 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

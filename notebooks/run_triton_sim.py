@@ -10,7 +10,8 @@ Prerequisites:
 
 #%%
 import sys
-sys.path.insert(0, "../src")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from tdgl_sdk import DFlowTritonPipeline
 from tdgl_workflow.mesh import build_rectangular_device
@@ -59,9 +60,9 @@ EPSILON_PARAMS = {
 
 SBATCH_OPTIONS = {
     "partition": "batch-csl",
-    "cpus-per-task": "4",
+    "cpus-per-task": "8",
     "mem": "16G",
-    "time": "02:00:00",
+    "time": "12:00:00",
 }
 
 #%%
@@ -112,9 +113,6 @@ print("Simulation running on Triton — open viewer below to watch in real-time.
 
 #%%
 # ── Open viewer (live refresh built-in) ───────────────────────────────────
-import time
-import httpx
-
 viewer = TdglDiscreteViewer(
     MINIO_URL,
     fps=10,

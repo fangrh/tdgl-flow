@@ -10,7 +10,8 @@ Prerequisites:
 #%%
 import json
 import sys
-sys.path.insert(0, "../src")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from tdgl_sdk.pipeline import SimulationPipeline
 from tdgl_viewer_rust.widget import TdglViewer
@@ -21,12 +22,12 @@ ARGO_URL = "http://localhost:30080"
 #%%
 # ── Simulation parameters ─────────────────────────────────────────────────
 DEVICE_PARAMS = {
-    "film_width": 10.0,
-    "film_height": 5.0,
+    "film_width": 32.0,
+    "film_height": 10.0,
     "elec_width": 0.2,
-    "elec_height": 5.1,
+    "elec_height": 10.1,
     "elec_y_offset": 0.0,
-    "probe_points": [[-1, 0], [1, 0]],
+    "probe_points": [[-3, 0], [3, 0]],
     "max_edge_length": 0.25,
     "smooth": 100,
 }
@@ -34,7 +35,7 @@ DEVICE_PARAMS = {
 TIMING_PARAMS = {
     "mode": "simple",
     "je_initial": 0.0,
-    "je_final": 20.0,
+    "je_final": 30.0,
     "je_step": 0.2,
     "ramp_time": 100.0,
     "stable_time": 200.0,
@@ -50,8 +51,8 @@ SOLVER_OPTIONS = {
 
 # 5x3 array of Gaussian spots across the film (centered at origin)
 _eps_positions = [[x, y]
-                  for x in [-4.0, -2.0, 0.0, 2.0, 4.0]
-                  for y in [-1.25, 0.0, 1.25]]
+                  for x in [0.0]
+                  for y in [-5, -3.75, -2.5, -1.25, 0.0, 1.25, 2.5, 3.75, 5]]
 EPSILON_PARAMS = {
     "type": "gaussian",
     "positions": _eps_positions,

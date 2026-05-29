@@ -9,7 +9,8 @@ Prerequisites:
 
 #%%
 import sys
-sys.path.insert(0, "../src")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from tdgl_sdk.pipeline import SimulationPipeline
 from cpp_tdgl_viewer_rust.widget import CppTdglViewer

@@ -25,6 +25,7 @@ class TdglDiscreteViewer:
         refresh_interval=5.0,
         debug=False,
     ):
+        self._minio_url = minio_url
         self._rust = _RustDiscreteViewer(minio_url)
         self._debug = debug
         if debug:
@@ -38,12 +39,14 @@ class TdglDiscreteViewer:
         self._show_vt_dot = bool(show_vt_dot)
         self._refresh_interval = max(1.0, float(refresh_interval))
         self._run_id = None
+        self._mesh_index_cache = {}
 
     def open(self, run_id=None):
         if run_id is None:
             raise ValueError("run_id is required for TdglDiscreteViewer")
-        self._run_id = run_id
+        self._repair_mesh_index(run_id)
         self._rust.open(run_id)
+        self._run_id = run_id
 
     def total_frames(self):
         return self._rust.total_frames()
@@ -54,6 +57,94 @@ class TdglDiscreteViewer:
     def set_show_vt_dot(self, show=True):
         self._show_vt_dot = bool(show)
         self._rust.set_show_vt_dot(self._show_vt_dot)
+
+    def _repair_mesh_index(self, run_id):
+        try:
+            import os
+            import tempfile
+
+            import boto3
+            import h5py
+            from botocore.config import Config as BotoConfig
+        except Exception:
+            return False
+
+        try:
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=self._rust_minio_url(),
+                aws_access_key_id=os.environ.get("MINIO_ACCESS_KEY", "minioadmin"),
+                aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "minioadmin123"),
+                region_name="us-east-1",
+                config=BotoConfig(connect_timeout=5, read_timeout=30, retries={"max_attempts": 2}),
+            )
+            bucket = os.environ.get("MINIO_BUCKET", "tdgl-results")
+            index_key = f"tdgl-runs/{run_id}/viewer-index.json"
+            obj = s3.get_object(Bucket=bucket, Key=index_key)
+            index = json.loads(obj["Body"].read())
+            if index.get("mesh_points", 0) > 0 and index.get("mesh_sites_size", 0) > 0:
+                self._mesh_index_cache[run_id] = {
+                    "mesh_points": int(index.get("mesh_points", 0)),
+                    "mesh_sites_offset": int(index.get("mesh_sites_offset", 0)),
+                    "mesh_sites_size": int(index.get("mesh_sites_size", 0)),
+                }
+                return False
+            steps = index.get("steps") or []
+            if not steps:
+                return False
+
+            used_cache = False
+            cached = self._mesh_index_cache.get(run_id)
+            if cached:
+                index.update(cached)
+                used_cache = True
+            else:
+                h5_file = next((s.get("h5_file") for s in steps if s.get("h5_file")), None)
+                if not h5_file:
+                    return False
+                h5_key = f"tdgl-runs/{run_id}/{h5_file}"
+                h5_path = os.path.join(tempfile.gettempdir(), f"{run_id}-{h5_file}")
+                s3.download_file(bucket, h5_key, h5_path)
+                with h5py.File(h5_path, "r") as h5:
+                    sites = None
+                    for path in ("mesh/sites", "solution/device/mesh/sites"):
+                        obj = h5
+                        for part in path.split("/"):
+                            obj = obj.get(part) if hasattr(obj, "get") else None
+                            if obj is None:
+                                break
+                        if obj is not None and isinstance(obj, h5py.Dataset):
+                            sites = obj
+                            break
+                    if sites is None:
+                        return False
+                    offset = sites.id.get_offset() or 0
+                    size = sites.size * sites.dtype.itemsize
+                    if offset == 0 or size == 0:
+                        return False
+                    cached = {
+                        "mesh_points": int(sites.shape[0]),
+                        "mesh_sites_offset": int(offset),
+                        "mesh_sites_size": int(size),
+                    }
+                    index.update(cached)
+                    self._mesh_index_cache[run_id] = cached
+
+            out_path = os.path.join(tempfile.gettempdir(), f"{run_id}-viewer-index.json")
+            with open(out_path, "w") as f:
+                json.dump(index, f)
+            s3.upload_file(out_path, bucket, index_key)
+            if self._debug:
+                source = "cache" if used_cache else "h5"
+                print(f"[discrete-viewer-debug] repaired mesh index for {run_id} from {source}")
+            return True
+        except Exception as e:
+            if self._debug:
+                print(f"[discrete-viewer-debug] mesh index repair failed for {run_id}: {e}")
+            return False
+
+    def _rust_minio_url(self):
+        return self._minio_url
 
     def display(self):
         """Display interactive viewer with run dropdown, playback controls, and live refresh."""
@@ -76,26 +167,37 @@ class TdglDiscreteViewer:
             description="Run:",
             layout=widgets.Layout(width="clamp(400px, 60vw, 800px)"),
         )
+        # ── Open run if needed ─────────────────────────────────────────
+        open_error = None
+        if self._run_id is None and run_ids:
+            for run_id in run_ids:
+                try:
+                    self.open(run_id=run_id)
+                    break
+                except Exception as e:
+                    open_error = f"{run_id}: {e}"
+                    if self._debug:
+                        print(f"[discrete-viewer-debug] skip run {open_error}")
+
         if self._run_id and self._run_id in run_ids:
             run_dropdown.value = self._run_id
 
-        # ── Open run if needed ─────────────────────────────────────────
-        if self._run_id is None and run_ids:
-            self.open(run_id=run_ids[0])
-
-        total = self._rust.total_frames()
+        total = self._rust.total_frames() if self._run_id is not None else 0
         if total == 0 and not run_ids:
             print("No discrete runs found.")
             return
 
-        try:
-            solve_t = self._rust.solve_time()
-        except Exception:
+        if self._run_id is None:
+            solve_t = 1.0
+        else:
             try:
-                latest_t = self._rust.latest_frame_time()
-                solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
+                solve_t = self._rust.solve_time()
             except Exception:
-                solve_t = 1.0
+                try:
+                    latest_t = self._rust.latest_frame_time()
+                    solve_t = latest_t * 1.1 if latest_t > 0 else 1.0
+                except Exception:
+                    solve_t = 1.0
 
         # ── Widgets ────────────────────────────────────────────────────
         image = widgets.Image(format="png", width=FRAME_W)
@@ -133,7 +235,10 @@ class TdglDiscreteViewer:
             style={"description_width": "70px"},
             layout=widgets.Layout(width="120px"),
         )
-        status = widgets.Label(value=f"frame 0/{max(total - 1, 0)}")
+        initial_status = f"frame 0/{max(total - 1, 0)}"
+        if self._run_id is None and open_error:
+            initial_status = f"No openable run: {open_error}"
+        status = widgets.Label(value=initial_status)
 
         # ── State ──────────────────────────────────────────────────────
         _cache = {}
@@ -183,7 +288,9 @@ class TdglDiscreteViewer:
             def _render_worker(fi, rt):
                 try:
                     png = self._rust.render_frame(fi)
-                except Exception:
+                except Exception as e:
+                    if _render_token[0] == rt and _current_frame[0] == fi:
+                        status.value = f"frame {fi} error: {e}"
                     return
                 with _cache_lock:
                     _cache[fi] = png
@@ -201,6 +308,8 @@ class TdglDiscreteViewer:
                 if _live_stop.is_set():
                     break
                 try:
+                    if self._run_id:
+                        self._repair_mesh_index(self._run_id)
                     n = self._rust.refresh_index()
                     _latest_frame[0] = n - 1
                     if n > _prev_total[0]:
@@ -245,6 +354,14 @@ class TdglDiscreteViewer:
                 self.open(run_id=selected_id)
             except Exception as e:
                 status.value = f"Error: {e}"
+                if self._run_id is not None and self._run_id in run_ids:
+                    _suppress_dropdown[0] = True
+                    run_dropdown.value = self._run_id
+                    _suppress_dropdown[0] = False
+                    _live_stop.clear()
+                    t = threading.Thread(target=_live_refresh, daemon=True)
+                    t.start()
+                    _live_thread[0] = t
                 return
             # Reset UI state
             total = self._rust.total_frames()

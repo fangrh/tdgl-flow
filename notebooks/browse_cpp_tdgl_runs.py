@@ -7,7 +7,8 @@ Prerequisites:
 
 #%%
 import sys
-sys.path.insert(0, "../src")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from tdgl_sdk.client import TDGLRunStore
 
