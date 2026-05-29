@@ -1,29 +1,24 @@
 #%%
-"""Submit cpp-tdgl simulation and view results with Rust viewer.
+"""Submit cpp-tdgl simulation and view results with the Rust viewer.
 
 Prerequisites:
     kubectl port-forward -n tdgl svc/argo-server 30080:2746 &
     kubectl port-forward -n tdgl svc/minio 30900:9000 &
-    cd tdgl-viewer-rust && maturin develop --release
-    docker build -f services/cpp-tdgl-runner/Dockerfile -t ghcr.io/fangrh/cpp-tdgl-runner:dev .
+    cd cpp-tdgl-viewer-rust && maturin develop --release
 """
 
 #%%
-import json
-import time
-import uuid
 import sys
 sys.path.insert(0, "../src")
 
-import httpx
-from tdgl_viewer_rust.widget import TdglViewer
+from tdgl_sdk.pipeline import SimulationPipeline
+from cpp_tdgl_viewer_rust.widget import CppTdglViewer
 
 MINIO_URL = "http://localhost:30900"
 ARGO_URL = "http://localhost:30080"
-NAMESPACE = "tdgl"
 
 #%%
-# ── Simulation parameters (same format as py-tdgl) ────────────────────────
+# ── Simulation parameters ─────────────────────────────────────────────────
 DEVICE_PARAMS = {
     "film_width": 10.0,
     "film_height": 5.0,
@@ -60,82 +55,53 @@ EPSILON_PARAMS = {
 
 #%%
 # ── Submit cpp-tdgl workflow ──────────────────────────────────────────────
-from datetime import datetime, timezone
+pipe = SimulationPipeline(argo_url=ARGO_URL, minio_endpoint=MINIO_URL)
 
-run_id = (
-    datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    + "-" + uuid.uuid4().hex[:6]
+run_id, wf_name = pipe.submit(
+    device_params=DEVICE_PARAMS,
+    timing_params=TIMING_PARAMS,
+    solver_options=SOLVER_OPTIONS,
+    epsilon_params=EPSILON_PARAMS,
+    workflow_name="cpp-tdgl-sim",
 )
-
-wf_body = {
-    "serverDryRun": False,
-    "workflow": {
-        "generateName": f"cpp-tdgl-sim-{run_id[:13]}-",
-        "namespace": NAMESPACE,
-        "spec": {
-            "workflowTemplateRef": {"name": "cpp-tdgl-sim"},
-            "arguments": {
-                "parameters": [
-                    {"name": "run-id", "value": run_id},
-                    {"name": "device-params-json", "value": json.dumps(DEVICE_PARAMS)},
-                    {"name": "timing-params-json", "value": json.dumps(TIMING_PARAMS)},
-                    {"name": "solver-options-json", "value": json.dumps(SOLVER_OPTIONS)},
-                    {"name": "epsilon-params-json", "value": json.dumps(EPSILON_PARAMS)},
-                ]
-            },
-        },
-    },
-}
-
-resp = httpx.post(
-    f"{ARGO_URL}/api/v1/workflows/{NAMESPACE}",
-    json=wf_body,
-    verify=False,
-    timeout=30,
-)
-resp.raise_for_status()
-wf_name = resp.json()["metadata"]["name"]
 print(f"Submitted: run_id={run_id}, workflow={wf_name}")
 print("Simulation running — open viewer below to watch in real-time.")
 
 #%%
-# ── Monitor workflow + open viewer when ready ──────────────────────────────
-viewer = TdglViewer(
+# ── Open viewer (poll until data appears) ────────────────────────────────
+import time
+import httpx
+
+viewer = CppTdglViewer(
     MINIO_URL,
     fps=10,
-    speed=1,
-    average_time=0.5,
-    show_vt_dot=True,
+    speed=5,
 )
 
-print(f"Workflow: {wf_name}  Run: {run_id}")
+print(f"Run: {run_id}")
 while True:
     try:
-        r = httpx.get(f"{ARGO_URL}/api/v1/workflows/{NAMESPACE}/{wf_name}", verify=False, timeout=5)
-        phase = (r.json().get("status") or {}).get("phase", "Unknown")
+        viewer.open(run_id=run_id)
+        n_steps = viewer._viewer.get_step_count()
+        print(f"  {n_steps} steps available")
+        break
     except Exception:
-        phase = "Unknown"
-
-    if phase in ("Failed", "Error"):
-        print(f"\r  Workflow {phase}                          ")
-        break
-    elif phase == "Succeeded":
         try:
-            viewer.open(run_id=run_id)
-            print(f"\r  Done — {viewer.total_frames()} frames                ")
-            viewer.display()
-        except Exception as e:
-            print(f"\r  Completed but viewer error: {e}    ")
-        break
-    else:
-        try:
-            viewer.open(run_id=run_id)
-            n = viewer.total_frames()
-            print(f"\r  [{phase}] {n} frames so far...  ", end="", flush=True)
-            viewer.display()
-            break
+            r = httpx.get(
+                f"{ARGO_URL}/api/v1/workflows/tdgl/{wf_name}",
+                verify=False, timeout=5,
+            )
+            phase = (r.json().get("status") or {}).get("phase", "Unknown")
+            if phase in ("Failed", "Error"):
+                print(f"  Workflow {phase}")
+                raise SystemExit(1)
+            print(f"\r  [{phase}] waiting for data...", end="", flush=True)
+        except SystemExit:
+            raise
         except Exception:
-            print(f"\r  [{phase}] waiting for data...  ", end="", flush=True)
+            print(f"\r  waiting for data...", end="", flush=True)
     time.sleep(3)
+
+viewer.display()
 
 #%%

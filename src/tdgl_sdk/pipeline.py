@@ -39,8 +39,13 @@ class SimulationPipeline:
         timing_params: dict,
         solver_options: dict | None = None,
         epsilon_params: dict | None = None,
+        workflow_name: str = "py-tdgl-sim",
     ) -> tuple[str, str]:
-        """Submit a py-tdgl-sim workflow. Returns (run_id, wf_name)."""
+        """Submit a simulation workflow. Returns (run_id, wf_name).
+
+        workflow_name: Argo WorkflowTemplate name (default "py-tdgl-sim").
+            Use "cpp-tdgl-sim" for the C++ solver pipeline.
+        """
         from hera.workflows import Workflow, Parameter
         from hera.workflows.models import WorkflowTemplateRef as WTR
 
@@ -50,9 +55,9 @@ class SimulationPipeline:
         )
 
         wf = Workflow(
-            generate_name=f"py-tdgl-sim-{run_id[:13]}-",
+            generate_name=f"{workflow_name}-{run_id[:13]}-",
             namespace=self.namespace,
-            workflow_template_ref=WTR(name="py-tdgl-sim"),
+            workflow_template_ref=WTR(name=workflow_name),
             arguments=[
                 Parameter(name="run-id", value=run_id),
                 Parameter(name="device-params-json", value=json.dumps(device_params)),

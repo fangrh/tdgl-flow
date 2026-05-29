@@ -30,6 +30,7 @@ impl DiscreteReader {
         }
     }
 
+    #[allow(dead_code)]
     pub fn index(&self) -> &Hdf5Index {
         &self.index
     }
@@ -38,14 +39,17 @@ impl DiscreteReader {
         self.n_sites
     }
 
+    #[allow(dead_code)]
     pub fn n_edges(&self) -> usize {
         self.n_edges
     }
 
+    #[allow(dead_code)]
     pub fn mesh_sites(&self) -> &[f64] {
         &self.mesh_sites
     }
 
+    #[allow(dead_code)]
     pub fn mesh_edges(&self) -> &[i64] {
         &self.mesh_edges
     }
@@ -78,7 +82,7 @@ impl DiscreteReader {
         let mut pos: usize = 8;
 
         while pos + 168 < bytes.len() {
-            let v1_start = pos;
+            let _v1_start = pos;
             let reserved1 = bytes[pos + 4];
             let version = bytes[pos + 6];
             if version != 1 || reserved1 != 0 {
@@ -89,7 +93,7 @@ impl DiscreteReader {
             let num_messages = u16::from_le_bytes([bytes[pos + 8], bytes[pos + 9]]) as usize;
             let _group_flags = bytes[pos + 10];
             let _compile_flags = bytes[pos + 11];
-            let base_addr = u64::from_le_bytes([
+            let _base_addr = u64::from_le_bytes([
                 bytes[pos + 16], bytes[pos + 17], bytes[pos + 18], bytes[pos + 19],
                 bytes[pos + 20], bytes[pos + 21], bytes[pos + 22], bytes[pos + 23],
             ]);
@@ -195,33 +199,33 @@ impl DiscreteReader {
         let version = bytes[pos];
         pos += 8;
 
-        let (rank, shape) = if version == 1 {
-            let rank = bytes[pos] as usize;
+        let shape = if version == 1 {
+            let _rank = bytes[pos] as usize;
             pos += 4;
-            let mut shape = Vec::with_capacity(rank);
-            for _ in 0..rank {
+            let mut shape = Vec::with_capacity(_rank);
+            for _ in 0.._rank {
                 let dim = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
                 shape.push(dim);
                 pos += 4;
             }
-            (rank, shape)
+            shape
         } else if version == 2 {
             let flags = bytes[pos];
             pos += 1;
-            let rank = (flags & 0x0F) as usize;
-            let mut shape = Vec::with_capacity(rank);
+            let _rank = (flags & 0x0F) as usize;
+            let mut shape = Vec::with_capacity(_rank);
             if flags & 0x10 != 0 {
                 pos += 4;
             }
             if flags & 0x20 != 0 {
                 pos += 4;
             }
-            for _ in 0..rank {
+            for _ in 0.._rank {
                 let dim = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
                 shape.push(dim);
                 pos += 4;
             }
-            (rank, shape)
+            shape
         } else {
             return None;
         };
@@ -368,6 +372,7 @@ impl DiscreteReader {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     pub fn read_mu(&self, step_idx: usize, frame_idx: usize) -> Result<Vec<f64>, String> {
         let step = self.index.steps.get(step_idx)
             .ok_or_else(|| format!("step {} not found", step_idx))?;

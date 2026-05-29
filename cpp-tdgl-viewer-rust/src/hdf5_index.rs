@@ -9,6 +9,7 @@ pub struct Hdf5Index {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StepInfo {
+    #[allow(dead_code)]
     pub step_idx: u32,
     #[serde(rename = "file")]
     pub h5_file: String,
@@ -34,6 +35,7 @@ impl Hdf5Index {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Manifest {
     pub run_id: String,
     #[serde(default)]
@@ -47,6 +49,7 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    #[allow(dead_code)]
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }

@@ -10,7 +10,9 @@ use pyo3::prelude::*;
 
 #[pyclass]
 struct CppTdglViewer {
+    #[allow(dead_code)]
     minio_url: String,
+    #[allow(dead_code)]
     bucket: String,
     run_id: String,
     client: MinioClient,

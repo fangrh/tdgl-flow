@@ -22,6 +22,7 @@ impl MinioClient {
         }
     }
 
+    #[allow(dead_code)]
     pub fn read_text(&self, key: &str) -> Result<String, String> {
         let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
         let resp = self.client.get(&url).send().map_err(|e| e.to_string())?;
@@ -87,6 +88,7 @@ impl MinioClient {
         Ok(self.object_info(key)?.and_then(|i| i.content_length))
     }
 
+    #[allow(dead_code)]
     pub fn list_prefix(&self, prefix: &str) -> Result<Vec<String>, String> {
         let url = format!(
             "{}/{}?list-type=2&prefix={}&delimiter=/",
