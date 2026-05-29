@@ -398,6 +398,10 @@ void TdglSolver::solve() {
                     rs_dt_buffer_.clear();
                     solution_writer_->flush();
                 }
+            } else if (split_writer_) {
+                split_writer_->write_frame(step, time_, dt_,
+                    psi_, mu_, supercurrent_, normal_current_,
+                    applied_A_, A_induced_, epsilon_);
             }
         }
 
@@ -423,6 +427,10 @@ void TdglSolver::solve() {
             rs_dt_buffer_.clear();
             solution_writer_->flush();
         }
+    } else if (split_writer_) {
+        split_writer_->write_frame(step, time_, dt_,
+            psi_, mu_, supercurrent_, normal_current_,
+            applied_A_, A_induced_, epsilon_);
     }
 
     std::cout << "Solve complete: " << step << " steps, time=" << time_

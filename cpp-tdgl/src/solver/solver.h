@@ -32,10 +32,14 @@ public:
     void solve();
     const SolutionWriter* solution_writer() const { return solution_writer_.get(); }
     SplitSolutionWriter* split_writer() const { return split_writer_; }
+    void set_split_writer(SplitSolutionWriter* sw) { split_writer_ = sw; }
     double terminal_current_at(double t) const;
 
     // Callback invoked when a timing step boundary is crossed
     std::function<void(int step_idx)> on_step_complete;
+
+    // Callback invoked when a frame is saved (for SplitSolutionWriter)
+    std::function<void(int frame_idx, double time, double dt)> on_frame_save;
 
 private:
     void update_mu_boundary(double j_scale = 1.0);

@@ -205,7 +205,7 @@ int main(int argc, char* argv[]) {
                 device, options, applied_A, timing,
                 1.0, "", restart_path);
 
-            // Capture timing, split_writer, and syncer in callback
+            // Capture timing, split_writer, and syncer in callbacks
             auto timing_copy = timing;
             solver_ptr->on_step_complete = [&, split_writer_ptr = split_writer.get(), syncer_ptr = syncer.get()](int step_idx) {
                 split_writer_ptr->end_step();
@@ -224,6 +224,9 @@ int main(int argc, char* argv[]) {
                         timing_copy.steps[next_step].stable_end);
                 }
             };
+
+            // Set the split_writer pointer so the solver can write frames directly
+            solver_ptr->set_split_writer(split_writer.get());
 
             // Begin first step
             double je0 = solver_ptr->terminal_current_at(timing.steps[0].ramp_start);
