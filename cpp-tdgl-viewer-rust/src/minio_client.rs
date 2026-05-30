@@ -75,17 +75,46 @@ impl MinioClient {
 
     pub fn object_info(&self, key: &str) -> Result<Option<ObjectInfo>, String> {
         let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
-        let resp = self.client.head(&url).send().map_err(|e| e.to_string())?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        eprintln!("[DEBUG] object_info HEAD url={}", url);
+        let resp = self.client.head(&url).send().map_err(|e| {
+            eprintln!("[DEBUG] HEAD error: {}", e);
+            e.to_string()
+        })?;
+        let status = resp.status();
+        let cl = resp.content_length();
+        eprintln!("[DEBUG] HEAD status={} content_length={:?}", status, cl);
+        if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         Ok(Some(ObjectInfo {
-            content_length: resp.content_length(),
+            content_length: cl,
         }))
     }
 
     pub fn object_size(&self, key: &str) -> Result<Option<u64>, String> {
-        Ok(self.object_info(key)?.and_then(|i| i.content_length))
+        // HEAD Content-Length is unreliable in some setups (e.g., MinIO behind nginx).
+        // Use a GET Range request for just 1 byte to get the actual Content-Range header.
+        let url = format!("{}/{}/{}", self.endpoint, self.bucket, key);
+        let resp = self.client
+            .get(&url)
+            .header("Range", "bytes=0-0")
+            .send()
+            .map_err(|e| e.to_string())?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        // Content-Range header format: "bytes 0-0/TOTAL_SIZE"
+        if let Some(cr) = resp.headers().get("content-range") {
+            let cr_str = cr.to_str().map_err(|e| e.to_string())?;
+            // Parse "bytes 0-0/609488"
+            if let Some(size_str) = cr_str.split('/').last() {
+                if let Ok(size) = size_str.parse::<u64>() {
+                    return Ok(Some(size));
+                }
+            }
+        }
+        // Fallback to content_length
+        Ok(Some(resp.content_length().unwrap_or(0)))
     }
 
     #[allow(dead_code)]

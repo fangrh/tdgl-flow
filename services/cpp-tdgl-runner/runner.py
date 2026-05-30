@@ -202,7 +202,7 @@ def _flatten_step_file(src_path, dst_path):
     }
 
 
-def _upload_discrete_output(steps_dir, bucket, run_id):
+def _upload_discrete_output(steps_dir, bucket, run_id, device=None):
     """Process step files into viewer-ready format and upload to MinIO.
 
     Called once after the solver finishes. Creates:
@@ -214,13 +214,31 @@ def _upload_discrete_output(steps_dir, bucket, run_id):
     """
     prefix = f"tdgl-runs/{run_id}"
 
-    # 1. Upload mesh.h5 (C++ SplitSolutionWriter::write_mesh() already creates this)
-    mesh_local = os.path.join(steps_dir, "mesh.h5")
-    if os.path.exists(mesh_local):
+    # 1. Create and upload mesh.h5 using h5py (compatible with Rust viewer parser)
+    if device is not None and device.mesh is not None:
+        mesh_local = os.path.join(steps_dir, "viewer_mesh.h5")
+        mesh = device.mesh
+        em = mesh.edge_mesh
+        with h5py.File(mesh_local, "w") as f:
+            m = f.create_group("mesh")
+            m.create_dataset("sites", data=np.asarray(mesh.sites, dtype=np.float64))
+            m.create_dataset("elements", data=np.asarray(mesh.elements, dtype=np.int64))
+            m.create_dataset("areas", data=np.asarray(mesh.areas, dtype=np.float64))
+            if em is not None:
+                eg = m.create_group("edge_mesh")
+                eg.create_dataset("centers", data=np.asarray(em.centers, dtype=np.float64))
+                eg.create_dataset("edges", data=np.asarray(em.edges, dtype=np.int64))
+                eg.create_dataset("edge_lengths", data=np.asarray(em.edge_lengths, dtype=np.float64))
         _upload_to_minio(mesh_local, bucket, f"{prefix}/mesh.h5")
         print(f"Uploaded mesh.h5 ({os.path.getsize(mesh_local)} bytes)")
     else:
-        print("Warning: mesh.h5 not found in steps dir")
+        # Fallback: upload C++ mesh.h5
+        mesh_local = os.path.join(steps_dir, "mesh.h5")
+        if os.path.exists(mesh_local):
+            _upload_to_minio(mesh_local, bucket, f"{prefix}/mesh.h5")
+            print(f"Uploaded mesh.h5 from C++ ({os.path.getsize(mesh_local)} bytes)")
+        else:
+            print("Warning: mesh.h5 not found")
 
     # 2. Process and upload each step file
     step_files = sorted(glob.glob(os.path.join(steps_dir, "step_*.h5")))
@@ -468,7 +486,7 @@ def main():
         # Upload discrete step files for the Rust viewer
         n_discrete = 0
         if os.path.isdir(steps_dir):
-            n_discrete = _upload_discrete_output(steps_dir, bucket, run_id)
+            n_discrete = _upload_discrete_output(steps_dir, bucket, run_id, device=device)
 
         # Count frames from monolithic output
         n_frames = 0
