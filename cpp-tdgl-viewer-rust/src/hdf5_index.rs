@@ -5,6 +5,8 @@ use std::collections::HashMap;
 pub struct Hdf5Index {
     #[serde(default)]
     pub steps: Vec<StepInfo>,
+    #[serde(default)]
+    pub n_sites: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]

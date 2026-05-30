@@ -202,7 +202,7 @@ def _flatten_step_file(src_path, dst_path):
     }
 
 
-def _upload_discrete_output(steps_dir, bucket, run_id, device=None):
+def _upload_discrete_output(steps_dir, bucket, run_id, device=None, n_sites=0):
     """Process step files into viewer-ready format and upload to MinIO.
 
     Called once after the solver finishes. Creates:
@@ -272,8 +272,8 @@ def _upload_discrete_output(steps_dir, bucket, run_id, device=None):
         print(f"Uploaded {basename}: {info['total_frames']} frames, "
               f"Je={info['je']:.2f}, psi_offset={info['psi_offset']}")
 
-    # 3. Upload discrete_index.json
-    index_data = {"steps": index_steps}
+    # 3. Upload discrete_index.json (include n_sites for viewers that can't parse mesh.h5)
+    index_data = {"steps": index_steps, "n_sites": n_sites if n_sites > 0 else None}
     index_path = os.path.join(steps_dir, "discrete_index.json")
     with open(index_path, "w") as f:
         json.dump(index_data, f, indent=2)
@@ -486,7 +486,7 @@ def main():
         # Upload discrete step files for the Rust viewer
         n_discrete = 0
         if os.path.isdir(steps_dir):
-            n_discrete = _upload_discrete_output(steps_dir, bucket, run_id, device=device)
+            n_discrete = _upload_discrete_output(steps_dir, bucket, run_id, device=device, n_sites=n_sites)
 
         # Count frames from monolithic output
         n_frames = 0

@@ -39,6 +39,10 @@ impl DiscreteReader {
         self.n_sites
     }
 
+    pub fn set_n_sites(&mut self, n: usize) {
+        self.n_sites = n;
+    }
+
     #[allow(dead_code)]
     pub fn n_edges(&self) -> usize {
         self.n_edges

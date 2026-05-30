@@ -54,8 +54,18 @@ impl CppTdglViewer {
             index.clone(),
         );
 
-        reader.load_mesh()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+        // Try to load mesh from mesh.h5. If that fails or finds 0 sites,
+        // read n_sites from discrete_index.json as a fallback.
+        let mesh_ok = reader.load_mesh().is_ok() && reader.n_sites() > 0;
+        if !mesh_ok {
+            let n_sites = index.n_sites;
+            if n_sites == 0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "mesh.h5 could not be parsed and discrete_index.json has no n_sites field"
+                ));
+            }
+            reader.set_n_sites(n_sites);
+        }
 
         self.index = Some(index);
         self.reader = Some(reader);
